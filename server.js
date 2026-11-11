@@ -91,7 +91,9 @@ async function seedTeamsIfEmpty() {
     await meta.updateOne({ _id: 'snk_default_teams_seeded' }, { $set: { value: true } }, { upsert: true });
     return;
   }
-  if (await meta.findOne({ _id: 'snk_default_teams_seeded' })) return;
+  // Older builds left this marker behind after an empty database was created.
+  // Only an explicit Reset All Data operation should suppress the default teams.
+  if (await meta.findOne({ _id: 'snk_explicit_empty_reset', value: true })) return;
   const docs = TEAM_CONFIG.map(([code, purse], index) => ({
     id: index + 1, name: code, short_name: code, logo_url: '',
     initial_purse: purse, remaining_purse: purse, indian_rtm: 3, overseas_rtm: 3,
@@ -562,6 +564,7 @@ app.post('/api/reset-all-data', async (req, res) => {
       for (const counter of ['auction_bids', 'trades', 'auction_events', 'team_squads', 'players', 'teams']) {
         await setCounter(counter, 0, mongoSession);
       }
+      await C('app_meta').updateOne({ _id: 'snk_explicit_empty_reset' }, { $set: { value: true } }, { upsert: true, session: mongoSession });
     });
     io.emit('auction:update'); res.json({ ok: true, message: 'All auction data has been removed.' });
   } catch (error) { handleError(res, error, 500); }
