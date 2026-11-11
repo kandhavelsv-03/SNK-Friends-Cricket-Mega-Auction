@@ -7,7 +7,7 @@ function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show")
 async function api(url,opts={}){const r=await fetch(url,{headers:{"Content-Type":"application/json",...(opts.headers||{})},...opts});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Request failed");return d}
 function page(name){document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));$("page-"+name).classList.add("active");document.querySelectorAll(".nav").forEach(n=>n.classList.toggle("active",n.dataset.page===name));$("pageTitle").textContent=({dashboard:"Dashboard",auction:"Live Auction",players:"Player Database",teams:"Teams & Squads",unsold:"Unsold Players",trades:"Player Trade",import:"Excel Import",history:"Auction History",retention:"Retention & Release",squad:"Squad Builder",analytics:"Auction Statistics",broadcast:"Live Broadcast",tools:"Auction Tools",nomination:"Nomination Center",analyzer:"Playing XI Analyzer",tournament:"Tournament Center"})[name];if(name==="auction")loadAuction();if(name==="players")loadPlayers();if(name==="teams")renderTeamsPage();if(name==="unsold")loadUnsold();if(name==="trades")fillTradeSelects();if(name==="history")loadHistory();if(name==="retention")loadRetention();if(name==="squad")loadSquadBuilder();if(name==="analytics")loadAnalytics();if(name==="nomination")loadNominationQueue();if(name==="analyzer")loadXIAnalyzer();if(name==="tournament")loadTournamentCenter()}
 document.querySelectorAll(".nav").forEach(n=>n.addEventListener("click",()=>page(n.dataset.page)));
-async function loadTeams(){try{teams=await api("/api/teams");renderTeamCards();fillTeamSelects();renderTeamsPage();["xiTeamSelect"].forEach(id=>{const el=$(id);if(el)el.innerHTML='<option value="">Select team</option>'+teams.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("")})}catch(e){toast(e.message)}}
+async function loadTeams(){try{teams=await api("/api/teams");renderTeamCards();fillTeamSelects();renderTeamsPage();["xiTeamSelect"].forEach(id=>{const el=$(id);if(el)el.innerHTML='<option value="">Select team</option>'+teams.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("")});["bidTeam","tradeFrom","tradeTo","xiTeamSelect","squadTeamSelect","retentionTeam"].forEach(renderTeamPickerPreview)}catch(e){toast(e.message)}}
 
 function teamLogoMarkup(team,cls="team-logo"){
   if(!team)return "";
@@ -22,6 +22,14 @@ function teamLogoMarkup(team,cls="team-logo"){
   if(code)return `<img class="${cls}" src="/assets/team-${code}.webp" alt="${esc(team.name||raw)} logo" loading="lazy" onerror="this.outerHTML='<span class=\"${cls} team-logo-fallback\">${esc(raw.slice(0,3)||'TEAM')}</span>'">`;
   if(team.logo_url)return `<img class="${cls}" src="${esc(team.logo_url)}" alt="${esc(team.name)} logo" loading="lazy">`;
   return `<span class="${cls} team-logo-fallback">${esc(raw.slice(0,3)||"TEAM")}</span>`;
+}
+function renderTeamPickerPreview(id){
+  const select=$(id);if(!select)return;
+  let preview=$(id+"LogoPreview");
+  if(!preview){preview=document.createElement("div");preview.id=id+"LogoPreview";preview.className="team-picker-preview";select.insertAdjacentElement("afterend",preview);}
+  const team=teams.find(t=>Number(t.id)===Number(select.value));
+  preview.innerHTML=team?`${teamLogoMarkup(team,"team-logo")}<span>${esc(team.name)}</span>`:"";
+  preview.hidden=!team;
 }
 function announceConfirm(title,html,okLabel="✓ OK · CONFIRM SOLD"){
   return new Promise(resolve=>{
@@ -38,7 +46,7 @@ function renderTeamsPage(){$("teamsPageGrid").innerHTML=teams.map(t=>`<div class
 async function viewSquad(id,name){try{const rows=await api("/api/squad/"+id);$("modalContent").innerHTML=`<h3>${esc(name)} – Squad</h3><p class="muted">${rows.length} players · Amounts in ₹ Crore</p><div class="table-wrap"><table><thead><tr><th>PLAYER</th><th>CATEGORY</th><th>ROLE</th><th>TYPE</th><th>PRICE</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.category}</td><td>${esc(p.role)}</td><td>${p.acquisition_type}</td><td>${Number(p.amount).toFixed(2)}</td></tr>`).join("")}</tbody></table></div>`;openModal()}catch(e){toast(e.message)}}
 async function loadStats(){try{const s=await api("/api/stats");$("statTotal").textContent=s.total||0;$("statAvailable").textContent=s.available||0;$("statSold").textContent=(Number(s.sold)||0)+(Number(s.retained)||0);$("statUnsold").textContent=s.unsold||0}catch(e){}}
 async function loadPlayers(){try{const q=new URLSearchParams({search:$("playerSearch")?.value||"",category:$("playerCategory")?.value||"",role:$("playerRole")?.value||"",status:$("playerStatus")?.value||""});players=await api("/api/players?"+q);$("playersTable").innerHTML=players.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="muted">${esc(p.country||"")}</div></td><td>${p.category}</td><td>${esc(p.role)}</td><td>${esc(p.previous_team||"—")}</td><td>₹${Number(p.previous_price||0).toFixed(2)} Cr</td><td><span class="status ${p.status}">${p.status}</span></td></tr>`).join("")||'<tr><td colspan="6" class="empty">No players found.</td></tr>'}catch(e){toast(e.message)}}
-function fillTeamSelects(){const opts=teams.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");["bidTeam","tradeFrom","tradeTo"].forEach(id=>{if($(id))$(id).innerHTML='<option value="">Select team</option>'+opts})}
+function fillTeamSelects(){const opts=teams.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");["bidTeam","tradeFrom","tradeTo"].forEach(id=>{if($(id))$(id).innerHTML='<option value="">Select team</option>'+opts});["bidTeam","tradeFrom","tradeTo"].forEach(renderTeamPickerPreview)}
 async function loadAuction(){available=await api("/api/players?status=AVAILABLE");$("availableCount").textContent=available.length;renderAuctionList();if(!activePlayer&&available.length)selectPlayer(available[0].id);await loadLatestTeamSnapshot()}
 function renderAuctionList(){const q=($("auctionSearch").value||"").toLowerCase();const cat=$("auctionCategoryFilter")?.value||"",role=$("auctionRoleFilter")?.value||"";const list=available.filter(p=>p.name.toLowerCase().includes(q)&&(!cat||p.category===cat)&&(!role||p.role===role));$("auctionList").innerHTML=list.map(p=>`<div class="player-row" onclick="selectPlayer(${p.id})"><div><b>${esc(p.name)}</b><small>${p.category} · ${esc(p.role)}</small></div><button>SELECT</button></div>`).join("")||'<div class="empty">No available players.</div>'}
 function setPlayerPhoto(p){
@@ -74,7 +82,7 @@ function selectPlayer(id){activeIndex=available.findIndex(p=>p.id===id);activePl
 function nextPlayer(){if(!available.length)return;selectPlayer(available[(activeIndex+1)%available.length].id)}
 function previousPlayer(){if(!available.length)return;selectPlayer(available[(activeIndex-1+available.length)%available.length].id)}
 function incrementBid(n){const v=Number($("bidAmount").value||currentBid)+n;$("bidAmount").value=v.toFixed(2)}
-$("bidTeam").addEventListener("change",()=>{});
+$("bidTeam").addEventListener("change",()=>renderTeamPickerPreview("bidTeam"));
 async function placeBid(){if(auctionPaused)throw new Error("Auction is paused");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select a team and enter a bid");if(amount<=currentBid)throw new Error("Bid must be higher than current bid");await api("/api/bid",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});currentBid=amount;currentBidTeam=teams.find(t=>t.id==team_id)?.name||"";publishBroadcastState("AUCTION LIVE",activePlayer.name,`Current bid ₹${amount.toFixed(2)} Cr · ${currentBidTeam}`);$("currentBid").textContent=amount.toFixed(2);$("currentBidTeam").textContent=currentBidTeam;resetBidCountdown();playAuctionTone("bid");toast("Bid recorded")}
 async function sellPlayer(){try{if(auctionPaused)throw new Error("Resume auction before marking a player SOLD");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select winning team and final amount");const soldTeamObj=teams.find(t=>Number(t.id)===Number(team_id));const soldTeam=soldTeamObj?.name||"Team";const soldLogo=teamLogoMarkup(soldTeamObj,"confirm-team-logo");if(!await announceConfirm("Confirm player sale?",`<b>${esc(activePlayer.name)}</b><br>Sold to <b>${esc(soldTeam)}</b><br>Final price: <b>₹${amount.toFixed(2)} Cr</b><div class="confirm-team">${soldLogo}<span>${esc(soldTeam)}</span></div>`))return;const soldName=activePlayer.name;await api("/api/sold",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});toast("Player sold successfully");playAuctionTone("sold");activePlayer=null;await refreshAll();await loadAuction();showAuctionOutcome("SOLD",soldName,soldTeam,amount);updateBroadcast("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`);publishBroadcastState("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`,soldTeamObj?.short_name||"",amount)}catch(e){toast(e.message)}}
 async function markUnsold(){try{if(auctionPaused)throw new Error("Resume auction before marking a player UNSOLD");if(!activePlayer)throw new Error("Select a player");if(!await announceConfirm("Confirm unsold result?",`<b>${esc(activePlayer.name)}</b><br>This player will return to the unsold pool.`,"✓ OK · CONFIRM UNSOLD"))return;const unsoldName=activePlayer.name;await api("/api/unsold",{method:"POST",body:JSON.stringify({player_id:activePlayer.id})});toast("Player moved to unsold list");playAuctionTone("unsold");activePlayer=null;await refreshAll();await loadAuction();showAuctionOutcome("UNSOLD",unsoldName,"","");updateBroadcast("UNSOLD",unsoldName,"Returned to player pool")}catch(e){toast(e.message)}}
@@ -85,17 +93,17 @@ async function loadRetention(){
     const poolPlayers=await api("/api/players?status=AVAILABLE");
     const eligible=poolPlayers.filter(p=>p.previous_team);
     $("retentionPlayer").innerHTML=eligible.map(p=>`<option value="${p.id}">${esc(p.name)} — ${esc(p.previous_team)} (${p.category})</option>`).join("")||'<option value="">No eligible previous-team players</option>';
-    $("retentionTeam").innerHTML=teams.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");
+    $("retentionTeam").innerHTML='<option value="">Select team</option>'+teams.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");renderTeamPickerPreview("retentionTeam");
     const retained=await api("/api/players?status=RETAINED");
-    $("retainedTable").innerHTML=retained.map(p=>`<tr><td><b>${esc(p.name)}</b></td><td>${esc(p.current_team||"—")}</td><td>${p.category}</td><td>₹${Number(p.sold_price||0).toFixed(2)} Cr</td><td><button class="btn btn-danger" onclick="releasePlayer(${p.id})">Release</button></td></tr>`).join("")||'<tr><td colspan="5" class="empty">No retained players yet.</td></tr>';
-    $("retentionPlayer").addEventListener("change",syncRetentionTeam,{once:true});
+    $("retainedTable").innerHTML=retained.map(p=>{const team=teams.find(t=>t.name===p.current_team);return `<tr><td><b>${esc(p.name)}</b></td><td>${team?teamLogoMarkup(team,"team-logo history-team-logo"):""}${esc(p.current_team||"—")}</td><td>${p.category}</td><td>₹${Number(p.sold_price||0).toFixed(2)} Cr</td><td><button class="btn btn-danger" onclick="releasePlayer(${p.id})">Release</button></td></tr>`}).join("")||'<tr><td colspan="5" class="empty">No retained players yet.</td></tr>';
+    $("retentionPlayer").addEventListener("change",syncRetentionTeam);$("retentionTeam").onchange=()=>renderTeamPickerPreview("retentionTeam");
     syncRetentionTeam();
   }catch(e){toast(e.message)}
 }
 async function syncRetentionTeam(){
   const poolPlayers=await api("/api/players?status=AVAILABLE");
   const p=poolPlayers.find(x=>x.id===$("retentionPlayer").value);
-  if(p){const t=teams.find(x=>x.name.trim().toLowerCase()===String(p.previous_team||"").trim().toLowerCase());if(t)$("retentionTeam").value=t.id;}
+    if(p){const t=teams.find(x=>x.name.trim().toLowerCase()===String(p.previous_team||"").trim().toLowerCase());if(t)$("retentionTeam").value=t.id;}renderTeamPickerPreview("retentionTeam");
 }
 async function executeRetention(){
   try{
@@ -122,7 +130,7 @@ function updateTradePreview(){
   const amount=Number($("tradeAmount").value),box=$("tradePreview");
   if(!from||!to||!Number.isFinite(amount)||amount<=0){box.textContent="Select seller, buyer and a valid amount to preview both purse changes.";return;}
   if(Number(from.id)===Number(to.id)){box.textContent="Seller and buyer must be different teams.";return;}
-  box.innerHTML=`<div><b>${esc(to.name)} (Buyer)</b><span>− ₹${amount.toFixed(2)} Cr</span></div><div><b>${esc(from.name)} (Seller)</b><span>+ ₹${amount.toFixed(2)} Cr</span></div>`;
+  box.innerHTML=`<div><b>${teamLogoMarkup(to,"team-logo history-team-logo")}${esc(to.name)} (Buyer)</b><span>− ₹${amount.toFixed(2)} Cr</span></div><div><b>${teamLogoMarkup(from,"team-logo history-team-logo")}${esc(from.name)} (Seller)</b><span>+ ₹${amount.toFixed(2)} Cr</span></div>`;
 }
 async function executeTrade(){
   try{
@@ -157,7 +165,7 @@ function openModal(){$("modal").classList.add("open")}function closeModal(){$("m
 async function refreshAll(){await Promise.all([loadTeams(),loadPlayers(),loadStats(),loadUnsold(),loadHistory()])}
 refreshAll().then(()=>loadAuction());
 
-["tradeFrom","tradeTo","tradeAmount"].forEach(id=>{const el=$(id);if(el){el.addEventListener("change",updateTradePreview);el.addEventListener("input",updateTradePreview);}});
+["tradeFrom","tradeTo","tradeAmount"].forEach(id=>{const el=$(id);if(el){el.addEventListener("change",()=>{updateTradePreview();renderTeamPickerPreview(id)});el.addEventListener("input",updateTradePreview);}});
 
 // --- SNK Friends feature pack ---
 let auctionTimerHandle=null, auctionTimerRemaining=60, auctionTimerPaused=true;
@@ -171,13 +179,14 @@ function updateBroadcast(status,name,details){
 async function loadSquadBuilder(){
   const sel=$("squadTeamSelect"); if(!sel)return;
   sel.innerHTML='<option value="">Select team</option>'+teams.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join("");
-  sel.onchange=async()=>{const id=sel.value,box=$("squadBuilderContent");if(!id){box.textContent="Choose a team.";return;}
+  renderTeamPickerPreview("squadTeamSelect");sel.onchange=()=>{renderTeamPickerPreview("squadTeamSelect");if(sel.value)loadSelectedSquad()};
+  async function loadSelectedSquad(){const id=sel.value,box=$("squadBuilderContent");if(!id){box.textContent="Choose a team.";return;}
     try{const [rows]=await Promise.all([api("/api/squad/"+id)]);
       const team=teams.find(t=>Number(t.id)===Number(id));
       const roleCounts={};rows.forEach(p=>roleCounts[p.role]=(roleCounts[p.role]||0)+1);
       box.innerHTML=`<div class="squad-summary"><b>${teamLogoMarkup(team,"team-logo history-team-logo")} ${esc(team.name)}</b><span>${rows.length}/20 Players</span><span>₹${Number(team.remaining_purse).toFixed(2)} Cr remaining</span><span>Indian ${team.indian_count}/9 · Overseas slots ${team.effective_overseas}/9 · Associate ${team.associate_count}</span></div><div class="role-chips">${Object.entries(roleCounts).map(([r,n])=>`<span>${esc(r)}: ${n}</span>`).join("")}</div><table><thead><tr><th>PLAYER</th><th>CATEGORY</th><th>ROLE</th><th>TYPE</th><th>PRICE (Cr)</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.category}</td><td>${esc(p.role)}</td><td>${p.acquisition_type}</td><td>${Number(p.amount).toFixed(2)}</td></tr>`).join("")}</tbody></table>`;
     }catch(e){box.textContent=e.message;}
-  };
+  }
 }
 async function loadAnalytics(){
   const box=$("analyticsContent");if(!box)return;
@@ -269,6 +278,7 @@ async function nominateRandomPlayer(){
 async function loadXIAnalyzer(){
  const sel=$("xiTeamSelect"),box=$("xiAnalyzerContent");if(!sel||!box)return;
  sel.onchange=async()=>{
+  renderTeamPickerPreview("xiTeamSelect");
   if(!sel.value){box.textContent="Select a team.";return}
   try{
    const squad=await api("/api/squad/"+sel.value);

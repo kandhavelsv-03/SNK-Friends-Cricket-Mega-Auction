@@ -511,16 +511,26 @@ app.get('/api/reports.xlsx', async (_, res) => {
     const teams = await C('teams').find({}).sort({ name: 1 }).toArray();
     const players = await C('players').find({}).sort({ name: 1 }).toArray();
     const teamMap = new Map(teams.map(team => [team.id, team.name]));
+    const teamLogoPath = team => {
+      const raw = String(team.short_name || team.name || '').trim().toUpperCase().replace(/\s+/g, '').replace(/[²^]/g, '2');
+      const aliases = { BCS: 'dcs', '7SB': '7sv', '7S': '7sv', KDSQUARE: 'kd2' };
+      const code = aliases[raw] || raw.toLowerCase();
+      return `/assets/team-${code}.webp`;
+    };
+    const teamById = new Map(teams.map(team => [team.id, team]));
     const playerRows = players.map(player => ({ name: player.name, country: player.country, category: player.category,
       role: player.role, status: player.status, previous_team: player.previous_team, base_price: player.base_price,
-      sold_price: player.sold_price, current_team: teamMap.get(player.current_team_id) || '' }));
+      sold_price: player.sold_price, current_team: teamMap.get(player.current_team_id) || '',
+      current_team_logo_path: teamById.has(player.current_team_id) ? teamLogoPath(teamById.get(player.current_team_id)) : '' }));
     const trades = await C('trades').find({}).sort({ id: -1 }).toArray();
     const tradeRows = trades.map(trade => ({ player: players.find(p => p.id === trade.player_id)?.name || '',
       seller: teamMap.get(trade.from_team_id) || '', buyer: teamMap.get(trade.to_team_id) || '',
+      seller_logo_path: teamById.has(trade.from_team_id) ? teamLogoPath(teamById.get(trade.from_team_id)) : '',
+      buyer_logo_path: teamById.has(trade.to_team_id) ? teamLogoPath(teamById.get(trade.to_team_id)) : '',
       amount: trade.amount, created_at: trade.created_at }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(teams.map(team => ({ id: team.id, name: team.name,
-      short_name: team.short_name, initial_purse: team.initial_purse, remaining_purse: team.remaining_purse,
+      short_name: team.short_name, logo_path: teamLogoPath(team), initial_purse: team.initial_purse, remaining_purse: team.remaining_purse,
       indian_rtm: team.indian_rtm, overseas_rtm: team.overseas_rtm }))), 'Teams & Purse');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(playerRows), 'Player Register');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tradeRows), 'Trade History');
