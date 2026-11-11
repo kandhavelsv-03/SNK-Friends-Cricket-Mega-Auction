@@ -58,7 +58,7 @@ On the first connection to an empty database, the app seeds exactly these 14 tea
 | RH | ₹47 Cr |
 | 7SV | ₹12 Cr |
 
-The seed marker prevents a deliberate **Reset All Data** operation from silently recreating teams after a restart. A reset remains destructive and requires the exact confirmation phrase in the UI.
+An empty database is seeded with the 14 default teams on first connection, including when an older seed marker exists without team records. A deliberate **Reset All Data** operation records a separate reset marker so the teams are not silently recreated after a restart. A reset remains destructive and requires the exact confirmation phrase in the UI.
 
 ## Excel import
 
