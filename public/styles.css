@@ -141,6 +141,9 @@ body[data-theme="neon"] .btn-gold{background:linear-gradient(120deg,#4d32bd,#26d
 .confirm-actions{display:flex;justify-content:center;gap:12px;margin-top:20px;flex-wrap:wrap}
 
 .history-team-logo{width:25px;height:25px;vertical-align:middle;margin-right:6px}
+.team-picker-preview{display:flex;align-items:center;gap:9px;min-height:44px;padding:5px 0;color:#eef3fb;font-weight:800}
+.team-picker-preview[hidden]{display:none}
+.team-picker-preview img{width:34px;height:34px;object-fit:contain}
 
 /* Phase 2 presentation components */
 .bid-clock-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;padding:11px 14px;border:1px solid rgba(242,199,92,.24);border-radius:12px;background:rgba(242,199,92,.06)}
