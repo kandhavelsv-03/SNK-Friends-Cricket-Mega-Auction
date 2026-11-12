@@ -102,7 +102,7 @@
 </section>
 <section id="page-import" class="page">
   <div class="section-head"><div><div class="eyebrow">BULK PLAYER DATABASE</div><h3>Import previous-season Excel</h3></div></div>
-  <div class="panel form-panel"><div class="upload-icon">⇧</div><h3>Upload player workbook</h3><p class="muted">Supported: .xlsx, .xls. Imports Player Import plus all team codes in Team Code Reference. Optional Photo URL column is supported.</p><input id="excelFile" type="file" accept=".xlsx,.xls"><button class="btn btn-gold" onclick="importExcel()">Import Excel</button><div id="importResult" class="result"></div>
+  <div class="panel form-panel"><div class="upload-icon">⇧</div><h3>Upload player workbook</h3><p class="muted">Supported: .xlsx, .xls. Imports Player Import plus all team codes in Team Code Reference. Optional Photo URL column is supported.</p><input id="excelFile" type="file" accept=".xlsx,.xls"><button id="importExcelBtn" class="btn btn-gold" onclick="importExcel()">Import Excel</button><div id="importProgress" class="result" aria-live="polite">Select your workbook, then click Import Excel. Upload progress and server processing status will appear here.</div><div id="importResult" class="result" aria-live="polite"></div>
   <div class="hint"><b>Expected columns</b><p>Player Name · Country Category · Role · Previous Price · Previous Team · Country · Base Price · Photo URL (optional)</p></div></div>
 </section>
 <section id="page-history" class="page">

@@ -169,7 +169,29 @@ function openTeamModal(){$("modalContent").innerHTML=`<h3>Add Franchise Team</h3
 async function createTeam(){try{await api("/api/teams",{method:"POST",body:JSON.stringify({name:$("newTeamName").value,short_name:$("newTeamShort").value,logo_url:$("newTeamLogo").value})});closeModal();toast("Team created with ₹90 Cr purse");await loadTeams()}catch(e){toast(e.message)}}
 function openPlayerModal(){$("modalContent").innerHTML=`<h3>Add Player</h3><label>Player Name<input id="newPlayerName"></label><label>Country<input id="newPlayerCountry"></label><label>Category<select id="newPlayerCategory"><option>Indian</option><option>Overseas</option><option>Associate</option></select></label><label>Role<select id="newPlayerRole"><option>Batter</option><option>Batting All-Rounder</option><option>Bowling All-Rounder</option><option>Bowler</option><option>Wicket Keeper</option></select></label><label>Previous Price (₹ Cr)<input id="newPlayerPrice" type="number" step=".01" value="0"></label><label>Previous Team<input id="newPlayerTeam"></label><label>Base Price (₹ Cr)<input id="newPlayerBase" type="number" step=".01" value=".50"></label><button class="btn btn-gold" onclick="createPlayer()">Save Player</button>`;openModal()}
 async function createPlayer(){try{await api("/api/players",{method:"POST",body:JSON.stringify({name:$("newPlayerName").value,country:$("newPlayerCountry").value,category:$("newPlayerCategory").value,role:$("newPlayerRole").value,previous_price:$("newPlayerPrice").value,previous_team:$("newPlayerTeam").value,base_price:$("newPlayerBase").value,photo_url:$("newPlayerPhoto").value})});closeModal();toast("Player added");await refreshAll()}catch(e){toast(e.message)}}
-async function importExcel(){try{const f=$("excelFile").files[0];if(!f)throw new Error("Choose an Excel file");const fd=new FormData();fd.append("file",f);const r=await fetch("/api/import",{method:"POST",body:fd});const d=await r.json();if(!r.ok)throw new Error(d.error);$("importResult").textContent=`Imported ${d.imported} players; skipped ${d.skipped}. Teams added: ${d.teamsImported||0}; existing team codes: ${d.teamsSkipped||0}.`;await refreshAll()}catch(e){toast(e.message)}}
+async function importExcel(){
+  const fileInput=$("excelFile"),button=$("importExcelBtn"),progress=$("importProgress"),result=$("importResult");
+  try{
+    const file=fileInput.files[0];if(!file)throw new Error("Choose an Excel file");
+    if(!/\.(xlsx|xls)$/i.test(file.name))throw new Error("Choose an .xlsx or .xls workbook");
+    const mb=(file.size/1024/1024).toFixed(2);button.disabled=true;button.textContent="Uploading…";result.textContent="";
+    progress.textContent=`Preparing ${file.name} (${mb} MB)…`;
+    const form=new FormData();form.append("file",file);
+    const data=await new Promise((resolve,reject)=>{
+      const xhr=new XMLHttpRequest();xhr.open("POST","/api/import");xhr.responseType="json";
+      xhr.upload.addEventListener("progress",e=>{if(e.lengthComputable){const pct=Math.round(e.loaded/e.total*100);progress.textContent=pct<100?`Uploading Excel… ${pct}%`:`Upload complete (100%). Processing rows and checking duplicate names in MongoDB…`;button.textContent=pct<100?`Uploading ${pct}%`:"Processing…";}});
+      xhr.addEventListener("load",()=>{const body=xhr.response||( ()=>{try{return JSON.parse(xhr.responseText)}catch{return {}}})();if(xhr.status>=200&&xhr.status<300)resolve(body);else reject(new Error(body.error||`Import failed (HTTP ${xhr.status})`));});
+      xhr.addEventListener("error",()=>reject(new Error("Network error while uploading. Please retry.")));
+      xhr.addEventListener("timeout",()=>reject(new Error("Upload timed out. Check your connection and try again.")));
+      xhr.timeout=180000;xhr.send(form);
+    });
+    progress.textContent="Import saved successfully. Refreshing player and team data…";
+    result.innerHTML=`<strong>Excel Import Completed Successfully</strong><br>${Number(data.imported||0)} new players added · ${Number(data.skippedExisting||0)} already in database skipped · ${Number(data.skippedDuplicateInFile||0)} duplicate names in this file skipped · ${Number(data.skippedInvalid||0)} invalid rows skipped.<br>${Number(data.teamsImported||0)} teams added · ${Number(data.teamsSkipped||0)} existing teams skipped.`;
+    progress.textContent=`Completed: processed ${Number(data.totalRows||0)} player rows.`;
+    await refreshAll();toast(`${Number(data.imported||0)} players added successfully`);
+  }catch(e){progress.textContent=`Import not completed: ${e.message}`;toast(e.message)}
+  finally{button.disabled=false;button.textContent="Import Excel";}
+}
 function openModal(){$("modal").classList.add("open")}function closeModal(){$("modal").classList.remove("open")}function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 async function refreshAll(){await Promise.all([loadTeams(),loadPlayers(),loadStats(),loadUnsold(),loadHistory()])}
 refreshAll().then(()=>loadAuction());
