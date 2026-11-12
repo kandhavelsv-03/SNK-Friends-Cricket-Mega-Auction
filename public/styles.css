@@ -169,3 +169,6 @@ body[data-theme="neon"] .btn-gold{background:linear-gradient(120deg,#4d32bd,#26d
 .message-card h2{margin:5px 0 10px;color:#f2cd72;font:800 23px 'Space Grotesk'}.message-card p{font-size:16px;line-height:1.6;color:#eef2f8;margin:0 0 22px;overflow-wrap:anywhere}
 .message-overlay .message-icon:has(+h2){ }
 @media(max-width:700px){.bid-controls{grid-template-columns:1fr}.bid-line strong{font-size:42px}.bid-movement button{flex:1}}
+
+/* Fast auction result announcement */
+.auction-result-banner{animation-duration:.18s!important;transition-duration:.18s!important}

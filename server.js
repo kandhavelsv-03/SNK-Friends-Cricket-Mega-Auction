@@ -33,11 +33,11 @@ const upload = multer({
 const mongoUri = process.env.MONGODB_URI;
 const dbName = process.env.MONGODB_DB_NAME || 'cricket_auction';
 
-if (!mongoUri) console.warn('MONGODB_URI is not configured.');
+if (!mongoUri) {
+  throw new Error('MONGODB_URI is required. Configure it in the environment before starting the auction server.');
+}
 
-const client = new MongoClient(
-  mongoUri || 'mongodb://127.0.0.1:27017',
-  {
+const client = new MongoClient(mongoUri, {
     maxPoolSize: Number(process.env.MONGODB_MAX_POOL_SIZE || 10),
     serverSelectionTimeoutMS: Number(
       process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || 10000
@@ -223,7 +223,9 @@ async function getTeamState(teamId, session) {
 }
 
 
+// ==========================================
 // SQUAD VALIDATION
+// ==========================================
 
 async function validateAddition(teamId, player, amount, session) {
   const s = await getTeamState(teamId, session);
@@ -233,21 +235,36 @@ async function validateAddition(teamId, player, amount, session) {
     throw new Error('Invalid amount');
   }
 
-  if (Number(s.team.remaining_purse) + 0.0001 < amt) {
+  if (!['Indian', 'Overseas', 'Associate'].includes(player.category)) {
+    throw new Error('Invalid player category');
+  }
+
+  const remainingPurse = Number(s.team.remaining_purse);
+
+  if (!Number.isFinite(remainingPurse) || remainingPurse < amt) {
     throw new Error('Insufficient purse');
   }
 
-  if (s.total >= 20) {
+  const MAX_SQUAD = 20;
+  const MIN_SQUAD = 17;
+  const RESERVE_PER_SLOT = 0.50;
+
+  if (s.total >= MAX_SQUAD) {
     throw new Error('Maximum squad size is 20');
   }
 
   const next = {
-    ...s.counts,
-    [player.category]: s.counts[player.category] + 1
+    Indian: Number(s.counts.Indian || 0),
+    Overseas: Number(s.counts.Overseas || 0),
+    Associate: Number(s.counts.Associate || 0)
   };
 
+  next[player.category] += 1;
+
+  const totalAfter = s.total + 1;
   const nextEff = effectiveOverseas(next);
 
+  // Maximum category limits
   if (next.Indian > 9) {
     throw new Error('Indian maximum is 9');
   }
@@ -257,45 +274,50 @@ async function validateAddition(teamId, player, amount, session) {
   }
 
   if (next.Associate > 11) {
+    throw new Error('Maximum Associate player count is 11');
+  }
+
+  // Remaining slots needed to reach minimum squad size
+  const slotsAfter = Math.max(0, MIN_SQUAD - totalAfter);
+
+  // Minimum category requirements
+  const missingIndian = Math.max(0, 8 - next.Indian);
+  const missingOverseas = Math.max(0, 8 - nextEff);
+  const missingAssociate = Math.max(0, 1 - next.Associate);
+
+  const missingCategorySlots =
+    missingIndian + missingOverseas + missingAssociate;
+
+  // Ensure minimum category requirements remain achievable
+  if (missingCategorySlots > slotsAfter) {
     throw new Error(
-      'Maximum Associate player count is 11 (2 dedicated + 9 overseas slots)'
+      'This purchase makes the minimum category requirements impossible'
     );
   }
 
-  if (s.total + 1 === 20) {
-    if (next.Indian < 8) {
-      throw new Error('A 20-player squad must contain at least 8 Indian players');
-    }
+  // Reserve ₹0.50 Cr for every missing minimum squad slot
+  const reserve = money(slotsAfter * RESERVE_PER_SLOT);
 
-    if (nextEff < 8) {
-      throw new Error(
-        'A 20-player squad must contain at least 8 Overseas-equivalent players'
-      );
-    }
+  const purseAfterPurchase = money(remainingPurse - amt);
 
-    if (next.Associate < 1) {
-      throw new Error(
-        'A 20-player squad must contain at least 1 Associate player'
-      );
-    }
+  if (purseAfterPurchase + 0.0001 < reserve) {
+    throw new Error(
+      `Keep at least Rs. ${reserve.toFixed(2)} Cr reserved for mandatory squad slots`
+    );
   }
 
   return s;
 }
 
 
+// ==========================================
 // ADD PLAYER TO TEAM
+// ==========================================
+
 
 async function addPlayerToTeam(teamId, player, amount, type, session) {
   await validateAddition(teamId, player, amount, session);
-
   const amt = money(amount);
-
-  await (await col('teams')).updateOne(
-    { id: Number(teamId) },
-    { $inc: { remaining_purse: -amt } },
-    { session }
-  );
 
   await (await col('team_squads')).insertOne({
     id: await nextId('team_squads'),
@@ -305,7 +327,7 @@ async function addPlayerToTeam(teamId, player, amount, type, session) {
     acquisition_type: type,
     created_at: now()
   }, { session });
-
+  
   await (await col('players')).updateOne(
     { id: Number(player.id) },
     {
@@ -318,8 +340,7 @@ async function addPlayerToTeam(teamId, player, amount, type, session) {
     },
     { session }
   );
-}
-
+  }
 
 // AUCTION EVENT
 
@@ -610,16 +631,15 @@ async function importTeamCodes(wb) {
     VTK: 90,
     SS: 90,
     FCK: 90,
-    TG: 87,
-    BBC: 87,
-    AKS: 67,
-    KD2: 67,
-    BR: 67,
-    CC: 53,
-    RH: 47,
-    '7SV': 12
+    TG: 90,
+    BBC: 90,
+    AKS: 90,
+    KD2: 90,
+    BR: 90,
+    CC: 90,
+    RH: 90,
+    '7SV': 90
   };
-
   const teams = await col('teams');
 
   const existing = new Set(
@@ -1014,8 +1034,7 @@ app.post('/api/release', async (req, res) => {
 
 
 // TRADE
-// Trade amount is deducted from buyer purse only.
-// Seller purse is not credited.
+// The buyer is debited and the seller is credited by the same amount.
 
 app.post('/api/trade', async (req, res) => {
   try {
@@ -1079,6 +1098,12 @@ app.post('/api/trade', async (req, res) => {
         { session: s }
       );
 
+      await (await col('teams')).updateOne(
+        { id: sellerId },
+        { $inc: { remaining_purse: amt } },
+        { session: s }
+      );
+
       await (await col('team_squads')).insertOne({
         id: await nextId('team_squads'),
         team_id: buyerId,
@@ -1116,14 +1141,15 @@ app.post('/api/trade', async (req, res) => {
         amount: amt,
         details: {
           from_team_id: sellerId,
-          buyer_only_deduction: true
+          buyer_purse_deducted: amt,
+          seller_purse_credited: amt
         }
       }, s);
 
       return {
         amount: amt,
         buyer_remaining_purse: Number(buyer.remaining_purse) - amt,
-        seller_remaining_purse: Number(seller.remaining_purse)
+        seller_remaining_purse: Number(seller.remaining_purse) + amt
       };
     });
 
@@ -1132,7 +1158,7 @@ app.post('/api/trade', async (req, res) => {
     res.json({
       ok: true,
       buyer_purse_deducted: out.amount,
-      seller_purse_credited: 0,
+      seller_purse_credited: out.amount,
       ...out
     });
 
@@ -1587,72 +1613,319 @@ app.get('/api/stats', async (_req, res) => {
 });
 
 
-// EXCEL REPORT
+// Individual team workbook: squad, role counts, purse and complete team history.
+app.get('/api/teams/:id/report.xlsx', async (req, res) => {
+  try {
+    const teamId = Number(req.params.id);
+    const [team, players, squad, events, trades] = await Promise.all([
+      (await col('teams')).findOne({ id: teamId }),
+      (await col('players')).find({}).toArray(),
+      (await col('team_squads')).find({ team_id: teamId }).sort({ id: 1 }).toArray(),
+      (await col('auction_events')).find({ $or: [{ team_id: teamId }, { 'details.from_team_id': teamId }] }).sort({ id: 1 }).toArray(),
+      (await col('trades')).find({ $or: [{ from_team_id: teamId }, { to_team_id: teamId }] }).sort({ id: 1 }).toArray()
+    ]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    const byId = new Map(players.map(p => [Number(p.id), p]));
+    const rows = squad.map(x => { const p = byId.get(Number(x.player_id)) || {}; return {
+      'Player ID': x.player_id, 'Player Name': p.name || '', Category: p.category || '', Role: p.role || '',
+      Country: p.country || '', 'Purchase Amount (Cr)': Number(x.amount || 0),
+      'Acquisition Type': x.acquisition_type || p.acquisition_type || '', 'Previous Team': p.previous_team || '',
+      'Player Status': p.status || ''
+    }; });
+    const roles = {};
+    for (const x of squad) { const role = byId.get(Number(x.player_id))?.role || 'Unspecified'; roles[role] = (roles[role] || 0) + 1; }
+    const categories = { Indian: 0, Overseas: 0, Associate: 0 };
+    for (const x of squad) { const c = byId.get(Number(x.player_id))?.category; if (c in categories) categories[c]++; }
+    const missing = Math.max(0, 17 - squad.length);
+    const wb = XLSX.utils.book_new();
+    const add = (name, data) => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.length ? data : [{ Info: 'No records' }]), name);
+    add('Team Summary', [{ Team: team.name, 'Team Code': team.short_name || '', 'Initial Purse (Cr)': team.initial_purse, 'Remaining Purse (Cr)': team.remaining_purse, 'Squad Size': squad.length, 'Minimum Squad': 17, 'Maximum Squad': 20, 'Missing Slots': missing, 'Minimum Reserve (Cr)': Number((missing * 0.5).toFixed(2)), 'Indian': categories.Indian, 'Overseas': categories.Overseas, 'Associate': categories.Associate, 'Effective Overseas': categories.Overseas + Math.max(0, categories.Associate - 2), 'Batter': roles.Batter || roles.Batsman || 0, 'Wicket Keeper': roles['Wicket Keeper'] || 0, 'Bowler': roles.Bowler || 0, 'All-Rounder': (roles['All-Rounder'] || 0) + (roles['Batting All-Rounder'] || 0) + (roles['Bowling All-Rounder'] || 0) }]);
+    add('Full Squad', rows);
+    add('Role Counts', Object.entries(roles).map(([Role, Count]) => ({ Role, Count })));
+    add('Auction History', events.map(e => ({ Event: e.event_type, Player: byId.get(Number(e.player_id))?.name || '', Amount: e.amount ?? '', Details: JSON.stringify(e.details || {}), Date: e.created_at || '' })));
+    add('Trade History', trades.map(t => ({ Player: byId.get(Number(t.player_id))?.name || '', Seller: t.from_team_id, Buyer: t.to_team_id, Amount: t.amount, Date: t.created_at || '' })));
+    res.setHeader('Content-Disposition', `attachment; filename="${String(team.short_name || team.name).replace(/[^a-z0-9_-]/gi, '_')}_Squad_Report.xlsx"`);
+    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// EXCEL REPORT — 21 SHEETS (read-only; does not modify MongoDB)
 
 app.get('/api/reports.xlsx', async (_req, res) => {
   try {
-    const teams = await (await col('teams'))
-      .find({})
-      .sort({ name: 1 })
-      .toArray();
-
-    const players = await (await col('players')).find({}).toArray();
-    const trades = await (await col('trades'))
-      .find({})
-      .sort({ id: -1 })
-      .toArray();
-
-    const tm = new Map(teams.map(t => [t.id, t.name]));
+    const [teams, players, squads, trades, events, bids] = await Promise.all([
+      (await col('teams')).find({}).sort({ name: 1 }).toArray(),
+      (await col('players')).find({}).sort({ name: 1 }).toArray(),
+      (await col('team_squads')).find({}).sort({ team_id: 1, id: 1 }).toArray(),
+      (await col('trades')).find({}).sort({ id: 1 }).toArray(),
+      (await col('auction_events')).find({}).sort({ id: 1 }).toArray(),
+      (await col('auction_bids')).find({}).sort({ id: 1 }).toArray()
+    ]);
 
     const wb = XLSX.utils.book_new();
+    const teamById = new Map(teams.map(t => [Number(t.id), t]));
+    const playerById = new Map(players.map(p => [Number(p.id), p]));
+    const squadByPlayer = new Map(squads.map(x => [Number(x.player_id), x]));
+    const squadByTeam = new Map();
 
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(teams),
-      'Teams & Purse'
-    );
+    for (const item of squads) {
+      const key = Number(item.team_id);
+      if (!squadByTeam.has(key)) squadByTeam.set(key, []);
+      squadByTeam.get(key).push(item);
+    }
 
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(
-        players.map(p => ({
-          ...p,
-          current_team: tm.get(p.current_team_id) || ''
-        })).map(({ _id, ...x }) => x)
-      ),
-      'Player Register'
-    );
+    const clean = value => value === undefined || value === null ? '' : value;
+    const dateValue = value => value instanceof Date ? value : (value ? new Date(value) : '');
+    const playerName = id => playerById.get(Number(id))?.name || '';
+    const teamName = id => teamById.get(Number(id))?.name || '';
+    const teamCode = team => team.short_name || team.name || `Team${team.id}`;
+    const categoryCounts = list => {
+      const counts = { Indian: 0, Overseas: 0, Associate: 0 };
+      for (const row of list) {
+        const player = playerById.get(Number(row.player_id));
+        if (player && Object.prototype.hasOwnProperty.call(counts, player.category)) {
+          counts[player.category]++;
+        }
+      }
+      return counts;
+    };
+    const effectiveOverseasCount = counts =>
+      Number(counts.Overseas || 0) + Math.max(0, Number(counts.Associate || 0) - 2);
+    const sheetName = (raw, used) => {
+      let base = String(raw || 'Team').replace(/[\\/?*\[\]:]/g, ' ').trim().slice(0, 31) || 'Team';
+      let candidate = base;
+      let n = 2;
+      while (used.has(candidate.toLowerCase())) {
+        const suffix = ` ${n++}`;
+        candidate = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+      }
+      used.add(candidate.toLowerCase());
+      return candidate;
+    };
+    const appendJson = (name, rows, headers) => {
+      const data = rows.length ? rows : (headers ? [Object.fromEntries(headers.map(h => [h, '']))] : []);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), name);
+    };
 
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(
-        trades.map(t => ({
-          player: players.find(p => p.id === t.player_id)?.name || '',
-          seller: tm.get(t.from_team_id) || '',
-          buyer: tm.get(t.to_team_id) || '',
-          amount: t.amount,
-          created_at: t.created_at
-        }))
-      ),
-      'Trade History'
-    );
+    // 1. All Teams Summary
+    const teamSummary = teams.map(team => {
+      const teamSquad = squadByTeam.get(Number(team.id)) || [];
+      const counts = categoryCounts(teamSquad);
+      const total = teamSquad.length;
+      const effectiveOverseas = effectiveOverseasCount(counts);
+      const reserveSlots = Math.max(0, 17 - total);
+      return {
+        Team: team.name,
+        'Team Code': team.short_name || '',
+        'Squad Size': total,
+        'Indian Players': counts.Indian,
+        'Overseas Players': counts.Overseas,
+        'Associate Players': counts.Associate,
+        'Effective Overseas': effectiveOverseas,
+        'Initial Purse (Cr)': Number(team.initial_purse || 0),
+        'Spent (Cr)': Number(team.initial_purse || 0) - Number(team.remaining_purse || 0),
+        'Remaining Purse (Cr)': Number(team.remaining_purse || 0),
+        'Minimum Squad': 17,
+        'Maximum Squad': 20,
+        'Missing Minimum Slots': reserveSlots,
+        'Mandatory Reserve (Cr)': Number((reserveSlots * 0.5).toFixed(2)),
+        'Indian RTM Remaining': Number(team.indian_rtm || 0),
+        'Overseas/Associate RTM Remaining': Number(team.overseas_rtm || 0)
+      };
+    });
+    appendJson('All Teams Summary', teamSummary);
+
+    // 2–15. One squad sheet for each team.
+    const usedNames = new Set(['all teams summary'.toLowerCase()]);
+    for (const team of teams) {
+      const teamSquad = squadByTeam.get(Number(team.id)) || [];
+      const counts = categoryCounts(teamSquad);
+      const rows = teamSquad.map(item => {
+        const player = playerById.get(Number(item.player_id)) || {};
+        return {
+          'Player ID': clean(player.id),
+          'Player Name': clean(player.name),
+          Category: clean(player.category),
+          Role: clean(player.role),
+          Country: clean(player.country),
+          'Purchase Amount (Cr)': Number(item.amount || 0),
+          'Acquisition Source': clean(item.acquisition_type),
+          'Previous Team': clean(player.previous_team),
+          'Previous Price (Cr)': Number(player.previous_price || 0),
+          'Acquired At': dateValue(item.created_at)
+        };
+      });
+      const summaryRows = [
+        { Field: 'Team', Value: team.name },
+        { Field: 'Team Code', Value: team.short_name || '' },
+        { Field: 'Squad Size', Value: teamSquad.length },
+        { Field: 'Indian / Overseas / Associate', Value: `${counts.Indian} / ${counts.Overseas} / ${counts.Associate}` },
+        { Field: 'Effective Overseas', Value: effectiveOverseasCount(counts) },
+        { Field: 'Initial Purse (Cr)', Value: Number(team.initial_purse || 0) },
+        { Field: 'Remaining Purse (Cr)', Value: Number(team.remaining_purse || 0) },
+        { Field: 'Mandatory Reserve (Cr)', Value: Number((Math.max(0, 17 - teamSquad.length) * 0.5).toFixed(2)) }
+      ];
+      const ws = XLSX.utils.json_to_sheet(summaryRows, { header: ['Field', 'Value'] });
+      XLSX.utils.sheet_add_aoa(ws, [['', ''], ['SQUAD DETAILS'], Object.keys(rows[0] || {
+        'Player ID': '', 'Player Name': '', Category: '', Role: '', Country: '',
+        'Purchase Amount (Cr)': '', 'Acquisition Source': '', 'Previous Team': '',
+        'Previous Price (Cr)': '', 'Acquired At': ''
+      })], { origin: -1 });
+      if (rows.length) XLSX.utils.sheet_add_json(ws, rows, { origin: -1, skipHeader: false });
+      XLSX.utils.book_append_sheet(wb, ws, sheetName(teamCode(team), usedNames));
+    }
+
+    // 16. All Players & Squad Details (includes available and unsold players too).
+    const allPlayerRows = players.map(player => {
+      const squadItem = squadByPlayer.get(Number(player.id));
+      return {
+        'Player ID': player.id,
+        'Player Name': player.name || '',
+        Category: player.category || '',
+        Role: player.role || '',
+        Country: player.country || '',
+        Status: player.status || '',
+        'Current Team': teamName(player.current_team_id),
+        'Current Team Code': teamById.get(Number(player.current_team_id))?.short_name || '',
+        'Purchase Amount (Cr)': squadItem ? Number(squadItem.amount || 0) : Number(player.sold_price || 0),
+        'Acquisition Source': squadItem?.acquisition_type || player.acquisition_type || '',
+        'Previous Team': player.previous_team || '',
+        'Previous Price (Cr)': Number(player.previous_price || 0),
+        'Base Price (Cr)': Number(player.base_price || 0),
+        'Photo URL': player.photo_url || ''
+      };
+    });
+    appendJson('All Players & Squad Details', allPlayerRows);
+
+    // 17. Role-wise Player Counts.
+    const roleKeys = [...new Set(players.map(p => String(p.role || 'Unspecified')))].sort();
+    const roleRows = [];
+    for (const team of teams) {
+      const teamSquad = squadByTeam.get(Number(team.id)) || [];
+      const teamPlayers = teamSquad.map(x => playerById.get(Number(x.player_id))).filter(Boolean);
+      for (const role of roleKeys) {
+        const matching = teamPlayers.filter(p => String(p.role || 'Unspecified') === role);
+        roleRows.push({
+          Team: team.name,
+          'Team Code': team.short_name || '',
+          Role: role,
+          'Player Count': matching.length,
+          'Player Names': matching.map(p => p.name).join(', ')
+        });
+      }
+    }
+    appendJson('Role-wise Player Counts', roleRows, ['Team', 'Team Code', 'Role', 'Player Count', 'Player Names']);
+
+    // 18. Purse Summary.
+    const purseRows = teams.map(team => {
+      const teamSquad = squadByTeam.get(Number(team.id)) || [];
+      const counts = categoryCounts(teamSquad);
+      const reserveSlots = Math.max(0, 17 - teamSquad.length);
+      return {
+        Team: team.name,
+        'Team Code': team.short_name || '',
+        'Initial Purse (Cr)': Number(team.initial_purse || 0),
+        'Remaining Purse (Cr)': Number(team.remaining_purse || 0),
+        'Total Spent (Cr)': Number((Number(team.initial_purse || 0) - Number(team.remaining_purse || 0)).toFixed(2)),
+        'Squad Size': teamSquad.length,
+        'Minimum Squad': 17,
+        'Maximum Squad': 20,
+        'Reserve Slots': reserveSlots,
+        'Reserve Amount (Cr)': Number((reserveSlots * 0.5).toFixed(2)),
+        'Spendable Purse After Reserve (Cr)': Number((Number(team.remaining_purse || 0) - reserveSlots * 0.5).toFixed(2)),
+        Indian: counts.Indian,
+        Overseas: counts.Overseas,
+        Associate: counts.Associate,
+        'Effective Overseas': effectiveOverseasCount(counts)
+      };
+    });
+    appendJson('Purse Summary', purseRows);
+
+    // 19. Auction History: bids plus non-trade/non-RTM/non-retention auction events.
+    const auctionEventRows = events
+      .filter(e => !['TRADE', 'RTM', 'RETENTION'].includes(String(e.event_type || '').toUpperCase()))
+      .map(e => ({
+        'History ID': e.id,
+        'Record Type': 'EVENT',
+        'Event Type': e.event_type || '',
+        'Player ID': clean(e.player_id),
+        'Player Name': playerName(e.player_id),
+        Team: teamName(e.team_id),
+        'Team ID': clean(e.team_id),
+        'Amount (Cr)': clean(e.amount),
+        Details: e.details ? JSON.stringify(e.details) : '',
+        'Date & Time': dateValue(e.created_at)
+      }));
+    const bidRows = bids.map(b => ({
+      'History ID': b.id,
+      'Record Type': 'BID',
+      'Event Type': 'BID',
+      'Player ID': b.player_id,
+      'Player Name': playerName(b.player_id),
+      Team: teamName(b.team_id),
+      'Team ID': b.team_id,
+      'Amount (Cr)': Number(b.amount || 0),
+      Details: '',
+      'Date & Time': dateValue(b.created_at)
+    }));
+    appendJson('Auction History', [...auctionEventRows, ...bidRows].sort((a, b) => {
+      const da = a['Date & Time'] instanceof Date ? a['Date & Time'].getTime() : 0;
+      const db = b['Date & Time'] instanceof Date ? b['Date & Time'].getTime() : 0;
+      return da - db;
+    }));
+
+    // 20. Trade History.
+    const tradeRows = trades.map(t => ({
+      'Trade ID': t.id,
+      'Player ID': t.player_id,
+      'Player Name': playerName(t.player_id),
+      'Seller Team': teamName(t.from_team_id),
+      'Buyer Team': teamName(t.to_team_id),
+      'Trade Amount (Cr)': Number(t.amount || 0),
+      'Buyer Purse Deducted (Cr)': Number(t.amount || 0),
+      'Seller Purse Credited (Cr)': Number(t.amount || 0),
+      'Date & Time': dateValue(t.created_at)
+    }));
+    appendJson('Trade History', tradeRows, [
+      'Trade ID', 'Player ID', 'Player Name', 'Seller Team', 'Buyer Team',
+      'Trade Amount (Cr)', 'Buyer Purse Deducted (Cr)', 'Seller Purse Credited (Cr)', 'Date & Time'
+    ]);
+
+    // 21. RTM & Retention History (release events included for audit traceability).
+    const rtmRetentionRows = events
+      .filter(e => ['RTM', 'RETENTION', 'RELEASE'].includes(String(e.event_type || '').toUpperCase()))
+      .map(e => ({
+        'History ID': e.id,
+        'Event Type': e.event_type || '',
+        'Player ID': clean(e.player_id),
+        'Player Name': playerName(e.player_id),
+        Team: teamName(e.team_id),
+        'Team ID': clean(e.team_id),
+        'Amount (Cr)': clean(e.amount),
+        Details: e.details ? JSON.stringify(e.details) : '',
+        'Date & Time': dateValue(e.created_at)
+      }));
+    appendJson('RTM & Retention History', rtmRetentionRows, [
+      'History ID', 'Event Type', 'Player ID', 'Player Name', 'Team', 'Team ID',
+      'Amount (Cr)', 'Details', 'Date & Time'
+    ]);
+
+    // Keep the workbook's promised layout explicit and easy to audit.
+    if (wb.SheetNames.length !== 21) {
+      throw new Error(`Excel report expected 21 sheets but created ${wb.SheetNames.length}. Check that all 14 teams exist.`);
+    }
 
     res.setHeader(
       'Content-Disposition',
       'attachment; filename="SNK_Friends_Auction_Report.xlsx"'
     );
-
-    res.type(
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    ).send(
-      XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
-    );
-
+    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .send(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('Excel report generation failed:', e);
+    res.status(500).json({ error: e.message || 'Excel report generation failed' });
   }
 });
-
 
 // BACKUP
 
@@ -1691,106 +1964,29 @@ app.get('/api/backup', async (_req, res) => {
   }
 });
 
+// ==========================================
+// SECURITY: RESET AND RESTORE DISABLED
+// Protect all existing MongoDB data.
+// ==========================================
 
-// RESET ALL DATA
-// Use only when intentionally resetting the auction.
+app.all('/api/reset-all-data', (req, res) => {
+  return res.status(403).json({
+    ok: false,
+    error: 'Reset operation is disabled for data protection.'
+  });
+});
 
-app.post('/api/reset-all-data', async (req, res) => {
-  if (req.body?.confirm !== 'DELETE ALL DATA') {
-    return res.status(400).json({
-      error: 'Reset confirmation phrase is required'
-    });
-  }
-
-  try {
-    await withTransaction(async s => {
-      for (const n of [
-        'auction_bids',
-        'trades',
-        'auction_events',
-        'team_squads',
-        'players',
-        'teams'
-      ]) {
-        await (await col(n)).deleteMany({}, { session: s });
-      }
-    });
-
-    io.emit('auction:update');
-
-    res.json({
-      ok: true,
-      message: 'All auction data has been removed.'
-    });
-
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.all('/api/restore', (req, res) => {
+  return res.status(403).json({
+    ok: false,
+    error: 'Restore operation is disabled for data protection.'
+  });
 });
 
 
-// RESTORE BACKUP
-
-app.post('/api/restore', upload.single('file'), async (req, res) => {
-  if (req.body?.confirm !== 'RESTORE BACKUP') {
-    return res.status(400).json({
-      error: 'Type RESTORE BACKUP to confirm'
-    });
-  }
-
-  try {
-    if (!req.file) throw new Error('Choose a backup JSON file');
-
-    const backup = JSON.parse(req.file.buffer.toString('utf8'));
-
-    const allowed = [
-      'teams',
-      'players',
-      'team_squads',
-      'auction_bids',
-      'trades',
-      'auction_events'
-    ];
-
-    if (
-      !backup.tables ||
-      allowed.some(t => !Array.isArray(backup.tables[t]))
-    ) {
-      throw new Error('Invalid backup format');
-    }
-
-    await withTransaction(async s => {
-      for (const n of allowed) {
-        const c = await col(n);
-
-        await c.deleteMany({}, { session: s });
-
-        if (backup.tables[n].length) {
-          await c.insertMany(
-            backup.tables[n].map(x => ({
-              ...x,
-              created_at: x.created_at
-                ? new Date(x.created_at)
-                : now()
-            })),
-            { session: s }
-          );
-        }
-      }
-    });
-
-    await ensureIndexes();
-
-    io.emit('auction:update');
-    res.json({ ok: true, message: 'Backup restored' });
-
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-
+// ==========================================
 // LATEST TEAM
+// ==========================================
 
 app.get('/api/latest-team', async (_req, res) => {
   try {
