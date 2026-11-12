@@ -99,7 +99,7 @@ async function rtmPlayer(){try{
   const team_id=$("bidTeam").value,amount=Number($("bidAmount").value),team=teams.find(t=>Number(t.id)===Number(team_id));
   if(!team_id)throw new Error("Select the previous team in the team selector");
   if(!await announceConfirm("Confirm Right To Match?",`<b>${esc(activePlayer.name)}</b><br>RTM by <b>${esc(team?.name||"")}</b><br>Final price: <b>₹${amount.toFixed(2)} Cr</b><div class="confirm-team">${teamLogoMarkup(team,"confirm-team-logo")}<span>${esc(team?.name||"")}</span></div>`,"✓ CONFIRM RTM"))return;
-  const name=activePlayer.name;await api("/api/rtm",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});playAuctionTone("sold");activePlayer=null;await refreshAll();await loadAuction();showAuctionOutcome("RTM",name,team?.name||"",amount);updateBroadcast("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`);publishBroadcastState("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`,team?.short_name||"",amount);toast(`${name} retained by RTM – ${team?.name}`,"success");
+  const name=activePlayer.name;await api("/api/rtm",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("RTM",name,team?.name||"",amount);updateBroadcast("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`);publishBroadcastState("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`,team?.short_name||"",amount);toast(`${name} retained by RTM – ${team?.name}`,"success");activePlayer=null;refreshAll().then(loadAuction).catch(e=>toast(e.message));
 }catch(e){toast(e.message)}}
 
 async function loadRetention(){
@@ -326,6 +326,46 @@ async function loadTournamentCenter(){
 let bidClock=30,bidClockHandle=null;
 function renderBidClock(){const el=$("bidCountdown");if(el)el.textContent=String(Math.floor(bidClock/60)).padStart(2,"0")+":"+String(bidClock%60).padStart(2,"0")}
 function resetBidCountdown(){if(bidClockHandle){clearInterval(bidClockHandle);bidClockHandle=null;}bidClock=0;const el=$("bidClock");if(el)el.textContent="";}
+let auctionAudioContext=null;
+function unlockAuctionAudio(){
+  try{
+    const AudioCtx=window.AudioContext||window.webkitAudioContext;
+    if(!AudioCtx)return;
+    auctionAudioContext=auctionAudioContext||new AudioCtx();
+    if(auctionAudioContext.state==="suspended")auctionAudioContext.resume();
+  }catch(_){}
+}
+document.addEventListener("pointerdown",unlockAuctionAudio,{once:true});
+document.addEventListener("keydown",unlockAuctionAudio,{once:true});
 function playAuctionTone(kind){
- try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;const ctx=new C(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.connect(gain);gain.connect(ctx.destination);osc.type="sine";osc.frequency.value=kind==="sold"?880:kind==="unsold"?260:kind==="end"?440:660;gain.gain.setValueAtTime(.0001,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.12,ctx.currentTime+.03);gain.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+.38);osc.start();osc.stop(ctx.currentTime+.4);osc.onended=()=>ctx.close()}catch(_){}
+  try{
+    const AudioCtx=window.AudioContext||window.webkitAudioContext;
+    if(!AudioCtx)return;
+    auctionAudioContext=auctionAudioContext||new AudioCtx();
+    const ctx=auctionAudioContext;
+    if(ctx.state==="suspended")ctx.resume();
+    const now=ctx.currentTime;
+    const master=ctx.createGain();master.gain.value=0.72;master.connect(ctx.destination);
+    const tone=(freq,at,duration,volume=0.12,wave="sine")=>{
+      const osc=ctx.createOscillator(),gain=ctx.createGain();
+      osc.type=wave;osc.frequency.setValueAtTime(freq,at);
+      gain.gain.setValueAtTime(0.0001,at);
+      gain.gain.exponentialRampToValueAtTime(volume,at+0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001,at+duration);
+      osc.connect(gain);gain.connect(master);osc.start(at);osc.stop(at+duration+0.03);
+    };
+    if(kind==="sold"||kind==="rtm"){
+      // Short auction bell + rising celebratory stadium-style crowd cheer.
+      [880,1175,1568].forEach((f,i)=>tone(f,now+i*0.11,0.48,0.10,"triangle"));
+      [392,494,587,784].forEach((f,i)=>tone(f,now+0.22+i*0.09,0.72,0.045,"sawtooth"));
+      tone(1046,now+0.48,0.85,0.055,"triangle");
+    }else if(kind==="unsold"){
+      // Soft descending crowd disappointment effect.
+      [520,440,349,294].forEach((f,i)=>tone(f,now+i*0.17,0.58,0.065,"triangle"));
+      tone(196,now+0.18,0.95,0.035,"sine");
+    }else{
+      tone(kind==="end"?440:660,now,0.35,0.08);
+    }
+    setTimeout(()=>{try{master.disconnect()}catch(_){}},1800);
+  }catch(_){}
 }

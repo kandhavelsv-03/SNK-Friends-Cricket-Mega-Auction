@@ -59,7 +59,6 @@
         <div class="bid-controls"><input id="bidAmount" type="number" step="0.01" min="0.01" placeholder="Enter amount in Cr"><select id="bidTeam"><option value="">Select team</option></select></div>
         <div class="increments bid-movement"><span>MANUAL BID INCREASE</span><button onclick="incrementBid(.25)">+₹25 LAKH</button><button onclick="incrementBid(.50)">+₹50 LAKH</button><button onclick="incrementBid(1)">+₹1 CRORE</button><button onclick="incrementBid(2)">+₹2 CRORE</button><button onclick="incrementBid(5)">+₹5 CRORE</button></div>
       </div>
-      <div class="bid-clock-row"><span>LIVE BID COUNTDOWN</span><strong id="bidCountdown">00:30</strong><button class="btn btn-outline" onclick="resetBidCountdown()">Reset</button></div>
       <div class="auction-actions"><button class="btn btn-outline" id="auctionPauseButton" onclick="toggleAuctionPause()">⏸ Pause Auction</button><button class="btn btn-green" onclick="sellPlayer()">✓ SOLD</button><button class="btn btn-danger" onclick="markUnsold()">UNSOLD</button><button class="btn btn-purple" onclick="rtmPlayer()">RTM</button></div>
       <div class="stage-footer"><button class="btn btn-outline" onclick="previousPlayer()">← Previous</button><button class="btn btn-gold" onclick="nextPlayer()">Next Player →</button></div>
     </div>

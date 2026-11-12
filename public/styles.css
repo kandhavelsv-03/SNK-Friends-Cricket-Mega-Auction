@@ -172,3 +172,22 @@ body[data-theme="neon"] .btn-gold{background:linear-gradient(120deg,#4d32bd,#26d
 
 /* Fast auction result announcement */
 .auction-result-banner{animation-duration:.18s!important;transition-duration:.18s!important}
+
+
+/* Compact live auction stage: keep player, bid controls and result in one viewport. */
+#page-auction .auction-layout{gap:12px;align-items:start}
+#page-auction .player-stage{min-height:0;padding:14px 16px}
+#page-auction .auctioneer-host{margin:6px auto 8px;transform:scale(.88);transform-origin:top center}
+#page-auction .player-avatar{width:104px;height:104px;margin:6px auto}
+#page-auction #auctionPlayerName{margin:4px 0 6px;font-size:clamp(20px,2vw,28px)}
+#page-auction .player-meta{gap:8px;margin:10px 0}
+#page-auction .bid-box{padding:12px;margin:10px 0}
+#page-auction .increments{gap:6px;margin-top:8px}
+#page-auction .increments button{padding:7px 9px;font-size:11px}
+#page-auction .auction-actions{gap:8px;margin-top:10px}
+#page-auction .auction-actions .btn{padding:9px 12px}
+#page-auction .stage-footer{margin-top:9px;gap:8px}
+#page-auction .auction-result-banner{margin:8px auto;padding:9px 12px;max-width:100%;display:flex;align-items:center;justify-content:center;gap:12px}
+#page-auction .auction-result-banner .result-auctioneer{display:none}
+#page-auction .auction-result-banner strong{font-size:20px}
+@media(max-width:1000px){#page-auction .player-stage{padding:12px}}
