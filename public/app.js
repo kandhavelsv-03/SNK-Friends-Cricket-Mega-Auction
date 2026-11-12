@@ -85,6 +85,29 @@ function showAuctionOutcome(kind, playerName, teamName, amount){
   host.parentElement.insertBefore(banner,host.nextSibling);
   setTimeout(()=>{banner.classList.add("fade-away");},1250);
 }
+function advanceAuctionImmediately(completedPlayerId){
+  const nextPosition=Math.max(0,activeIndex);
+  available=available.filter(p=>Number(p.id)!==Number(completedPlayerId));
+  activePlayer=null;
+  renderAuctionList();
+  const count=$("availableCount");if(count)count.textContent=available.length;
+  if(available.length){
+    const next=available[Math.min(nextPosition,available.length-1)];
+    selectPlayer(next.id);
+  }else{
+    $("auctionPlayerName").textContent="All available players completed";
+    $("auctionCategory").textContent="—";$("auctionRole").textContent="—";
+    $("auctionPreviousTeam").textContent="—";$("auctionPreviousPrice").textContent="—";
+    $("auctionBasePrice").textContent="—";$("currentBid").textContent="—";
+    $("currentBidTeam").textContent="No available players";$("auctionIndex").textContent="AUCTION COMPLETE";
+    $("playerAvatar").innerHTML="<span>🏏</span>";
+    updateBroadcast("AUCTION LIVE","Waiting for next player","");
+  }
+}
+function refreshAuctionAfterResult(){
+  // The next player is already on screen; refresh supporting panels in the background.
+  refreshAll().then(loadAuction).catch(e=>toast(e.message));
+}
 function selectPlayer(id){activeIndex=available.findIndex(p=>p.id===id);activePlayer=available[activeIndex];if(!activePlayer)return;setPlayerPhoto(activePlayer);document.querySelector(".auction-result-banner")?.remove();currentBid=Number(activePlayer.base_price||.5);currentBidTeam="";$("auctionPlayerName").textContent=activePlayer.name;$("auctionPlayerName").title="Click to view player profile";$("auctionPlayerName").onclick=()=>showPlayerProfile(activePlayer.id);$("auctionCategory").textContent=activePlayer.category;$("auctionRole").textContent=activePlayer.role;$("auctionPreviousTeam").textContent=activePlayer.previous_team||"—";$("auctionPreviousPrice").textContent="₹"+Number(activePlayer.previous_price||0).toFixed(2)+" Cr";$("auctionBasePrice").textContent="₹"+currentBid.toFixed(2)+" Cr";$("currentBid").textContent=currentBid.toFixed(2);$("currentBidTeam").textContent="Base price";$("bidAmount").value=currentBid.toFixed(2);$("auctionIndex").textContent=`LOT ${activeIndex+1} / ${available.length}`;$("selectedTeamInfo").textContent="Select a team to view purse and slots.";updateBroadcast("AUCTION LIVE",activePlayer.name,`${activePlayer.category} · ${activePlayer.role} · Base ₹${currentBid.toFixed(2)} Cr`);resetBidCountdown()}
 function nextPlayer(){if(!available.length)return;selectPlayer(available[(activeIndex+1)%available.length].id)}
 function previousPlayer(){if(!available.length)return;selectPlayer(available[(activeIndex-1+available.length)%available.length].id)}
@@ -92,14 +115,14 @@ function incrementBid(n){const v=Number($("bidAmount").value||currentBid)+n;$("b
 $("bidTeam").addEventListener("change",()=>{});
 $("bidAmount").addEventListener("input",()=>{const v=Number($("bidAmount").value);if(Number.isFinite(v)&&v>0){$("currentBid").textContent=v.toFixed(2);$("currentBid").classList.add("bid-value-updated");}});
 async function placeBid(){if(auctionPaused)throw new Error("Auction is paused");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select a team and enter a bid");if(amount<=currentBid)throw new Error("Bid must be higher than current bid");await api("/api/bid",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});currentBid=amount;currentBidTeam=teams.find(t=>t.id==team_id)?.name||"";$("currentBid").textContent=amount.toFixed(2);$("currentBidTeam").textContent=currentBidTeam;resetBidCountdown();playAuctionTone("bid");toast("Bid recorded")}
-async function sellPlayer(){try{if(auctionPaused)throw new Error("Resume auction before marking a player SOLD");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select winning team and final amount");const soldTeamObj=teams.find(t=>Number(t.id)===Number(team_id));const soldTeam=soldTeamObj?.name||"Team";const soldName=activePlayer.name;await api("/api/sold",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("SOLD",soldName,soldTeam,amount);updateBroadcast("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`);publishBroadcastState("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`,soldTeamObj?.short_name||"",amount);activePlayer=null;refreshAll().then(loadAuction).catch(e=>toast(e.message));}catch(e){toast(e.message)}}
-async function markUnsold(){try{if(auctionPaused)throw new Error("Resume auction before marking a player UNSOLD");if(!activePlayer)throw new Error("Select a player");const unsoldName=activePlayer.name;await api("/api/unsold",{method:"POST",body:JSON.stringify({player_id:activePlayer.id})});playAuctionTone("unsold");showAuctionOutcome("UNSOLD",unsoldName,"","");updateBroadcast("UNSOLD",unsoldName,"Returned to player pool");activePlayer=null;refreshAll().then(loadAuction).catch(e=>toast(e.message));}catch(e){toast(e.message)}}
+async function sellPlayer(){try{if(auctionPaused)throw new Error("Resume auction before marking a player SOLD");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select winning team and final amount");const soldTeamObj=teams.find(t=>Number(t.id)===Number(team_id));const soldTeam=soldTeamObj?.name||"Team";const soldName=activePlayer.name;const completedId=activePlayer.id;await api("/api/sold",{method:"POST",body:JSON.stringify({player_id:completedId,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("SOLD",soldName,soldTeam,amount);updateBroadcast("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`);publishBroadcastState("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`,soldTeamObj?.short_name||"",amount);setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},250);}catch(e){toast(e.message)}}
+async function markUnsold(){try{if(auctionPaused)throw new Error("Resume auction before marking a player UNSOLD");if(!activePlayer)throw new Error("Select a player");const unsoldName=activePlayer.name;const completedId=activePlayer.id;await api("/api/unsold",{method:"POST",body:JSON.stringify({player_id:completedId})});playAuctionTone("unsold");showAuctionOutcome("UNSOLD",unsoldName,"","");updateBroadcast("UNSOLD",unsoldName,"Returned to player pool");setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},250);}catch(e){toast(e.message)}}
 async function rtmPlayer(){try{
   if(auctionPaused)throw new Error("Resume auction before using RTM");if(!activePlayer)throw new Error("Select a player");
   const team_id=$("bidTeam").value,amount=Number($("bidAmount").value),team=teams.find(t=>Number(t.id)===Number(team_id));
   if(!team_id)throw new Error("Select the previous team in the team selector");
   if(!await announceConfirm("Confirm Right To Match?",`<b>${esc(activePlayer.name)}</b><br>RTM by <b>${esc(team?.name||"")}</b><br>Final price: <b>₹${amount.toFixed(2)} Cr</b><div class="confirm-team">${teamLogoMarkup(team,"confirm-team-logo")}<span>${esc(team?.name||"")}</span></div>`,"✓ CONFIRM RTM"))return;
-  const name=activePlayer.name;await api("/api/rtm",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("RTM",name,team?.name||"",amount);updateBroadcast("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`);publishBroadcastState("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`,team?.short_name||"",amount);toast(`${name} retained by RTM – ${team?.name}`,"success");activePlayer=null;refreshAll().then(loadAuction).catch(e=>toast(e.message));
+  const name=activePlayer.name;const completedId=activePlayer.id;await api("/api/rtm",{method:"POST",body:JSON.stringify({player_id:completedId,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("RTM",name,team?.name||"",amount);updateBroadcast("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`);publishBroadcastState("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`,team?.short_name||"",amount);toast(`${name} retained by RTM – ${team?.name}`,"success");setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},250);
 }catch(e){toast(e.message)}}
 
 async function loadRetention(){
@@ -154,16 +177,48 @@ async function executeTrade(){
     await refreshAll();await fillTradeSelects();updateTradePreview();
   }catch(e){toast(e.message)}
 }
-async function resetAllData(){
-  if(!confirm("DANGER: Permanently delete ALL teams, players, squads, bids, trades and auction history?"))return;
-  const phrase=prompt('Type DELETE ALL DATA to confirm the full reset:');
-  if(phrase!=="DELETE ALL DATA"){toast("Reset cancelled. No data was deleted.");return;}
-  try{
-    await api("/api/reset-all-data",{method:"POST",body:JSON.stringify({confirm:"DELETE ALL DATA"})});
-    activePlayer=null;available=[];toast("All auction data removed. You can start fresh.");
-    await refreshAll();await loadAuction();await loadHistory();await fillTradeSelects();
-  }catch(e){toast(e.message)}
+function downloadResetBackupFile(backup){
+  const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);const a=document.createElement("a");
+  a.href=url;a.download=`SNK_Pre_Reset_Backup_${new Date().toISOString().replace(/[:.]/g,"-")}.json`;
+  document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
 }
+
+async function resetAllData(){
+  if(!confirm("DANGER: This clears all players, squads, bids, trades, auction history and broadcast state. The 14 default teams will be recreated. A backup will download automatically. Continue?")) return;
+
+  const phrase = prompt('Type DELETE ALL DATA to confirm the full reset:');
+
+  if(phrase !== "DELETE ALL DATA"){
+    toast("Reset cancelled. No data was deleted.");
+    return;
+  }
+
+  try {
+    const result = await api("/api/reset-all-data", {
+      method: "POST",
+      body: JSON.stringify({
+        confirm: "DELETE ALL DATA"
+      })
+    });
+
+    if(result.backup) downloadResetBackupFile(result.backup);
+
+    activePlayer = null;
+    available = [];
+
+    toast(result.message || "All auction data cleared.", "success");
+
+    await refreshAll();
+    await loadAuction();
+    await loadHistory();
+    await fillTradeSelects();
+
+  } catch(e) {
+    toast(e.message);
+  }
+}
+
 async function loadHistory(){try{const rows=await api("/api/history");$("historyTable").innerHTML=rows.map(e=>`<tr><td><span class="status">${e.event_type}</span></td><td>${esc(e.player_name||"—")}</td><td>${(()=>{const t=teams.find(x=>x.name===e.team_name);return t?`${teamLogoMarkup(t,"team-logo history-team-logo")} ${esc(e.team_name)}`:esc(e.team_name||"—")})()}</td><td>${(()=>{const t=teams.find(x=>x.name===e.seller_team_name);return t?`${teamLogoMarkup(t,"team-logo history-team-logo")} ${esc(e.seller_team_name)}`:esc(e.seller_team_name||"—")})()}</td><td>${e.amount==null?"—":"₹"+Number(e.amount).toFixed(2)+" Cr"}</td><td>${new Date(e.created_at).toLocaleString()}</td></tr>`).join("")||'<tr><td colspan="5" class="empty">No activity yet.</td></tr>'}catch(e){}}
 function openTeamModal(){$("modalContent").innerHTML=`<h3>Add Franchise Team</h3><label>Team Name<input id="newTeamName" placeholder="e.g. Chennai Super Kings"></label><label>Short Name<input id="newTeamShort" placeholder="CSK"></label><label>Logo URL (optional)<input id="newTeamLogo" placeholder="https://..."></label><button class="btn btn-gold" onclick="createTeam()">Create Team · ₹90 Cr</button>`;openModal()}
 async function createTeam(){try{await api("/api/teams",{method:"POST",body:JSON.stringify({name:$("newTeamName").value,short_name:$("newTeamShort").value,logo_url:$("newTeamLogo").value})});closeModal();toast("Team created with ₹90 Cr purse");await loadTeams()}catch(e){toast(e.message)}}

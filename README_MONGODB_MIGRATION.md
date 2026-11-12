@@ -24,3 +24,9 @@ Set the same environment variables in Vercel (Production, Preview as needed), th
 - Rotate any MongoDB password or session secret previously pasted into chat or source control.
 - MongoDB transactions require Atlas (replica set), which is supported by Atlas clusters.
 - This migration has passed local syntax checks and the repository's 7 automated tests. A live Atlas connection and real Vercel deployment still need to be tested with your private environment variables.
+
+## Admin full reset
+
+The **Reset All Data** action is available only when `RESET_ADMIN_TOKEN` is configured on the server. Set a long, unique secret in local `.env` and in Vercel Project Settings → Environment Variables. Never commit the real token. During reset, the admin must type `DELETE ALL DATA` and provide the token. The server builds a complete JSON backup first and returns it for automatic download; if backup creation fails, it does not delete records. It then clears players, teams, squads, bids, trades, auction events and broadcast state, resets counters, and recreates the 14 default teams. Sessions are not deleted.
+
+Example placeholder only: see `.env.example`. Do not use the placeholder values in production.

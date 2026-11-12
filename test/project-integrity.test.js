@@ -31,3 +31,27 @@ test('team purse values and existing UI assets are retained', () => {
     assert.ok(fs.existsSync(path.join(root, 'public', 'assets', file)), `missing asset ${file}`);
   }
 });
+
+test('full reset requires confirmation and creates a pre-reset backup', () => {
+  const server = fs.readFileSync(
+    path.join(__dirname, '..', 'server.js'),
+    'utf8'
+  );
+
+  const resetRoute = server.slice(
+    server.indexOf("app.post('/api/reset-all-data'"),
+    server.indexOf("app.all('/api/restore'")
+  );
+
+  assert.match(resetRoute, /confirm !== 'DELETE ALL DATA'/);
+  assert.match(resetRoute, /automatic-pre-reset-backup/);
+  assert.match(resetRoute, /deleteMany/);
+  assert.match(resetRoute, /seedTeamsIfEmpty/);
+  assert.doesNotMatch(resetRoute, /RESET_ADMIN_TOKEN/);
+});
+
+test('SOLD, UNSOLD and RTM advance to the next player without waiting for full refresh', () => {
+  const app = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
+  assert.match(app, /function advanceAuctionImmediately\(completedPlayerId\)/);
+  assert.match(app, /setTimeout\(\(\)=>\{advanceAuctionImmediately\(completedId\);refreshAuctionAfterResult\(\);\},250\)/);
+});

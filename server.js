@@ -6,6 +6,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const crypto = require('crypto');
 const cors = require('cors');
 const session = require('express-session');
 
@@ -1965,21 +1966,83 @@ app.get('/api/backup', async (_req, res) => {
 });
 
 // ==========================================
-// SECURITY: RESET AND RESTORE DISABLED
-// Protect all existing MongoDB data.
+// ADMIN RESET - BACKUP BEFORE DELETE
 // ==========================================
 
-app.all('/api/reset-all-data', (req, res) => {
-  return res.status(403).json({
-    ok: false,
-    error: 'Reset operation is disabled for data protection.'
-  });
+app.post('/api/reset-all-data', async (req, res) => {
+  try {
+    if (req.body?.confirm !== 'DELETE ALL DATA') {
+      return res.status(400).json({
+        ok: false,
+        error: 'Type DELETE ALL DATA to confirm.'
+      });
+    }
+
+    const collectionNames = [
+      'teams',
+      'players',
+      'team_squads',
+      'auction_bids',
+      'trades',
+      'auction_events',
+      'broadcast_state'
+    ];
+
+    // Create backup before deleting anything
+    const backupTables = {};
+
+    for (const name of collectionNames) {
+      const documents = await (await col(name)).find({}).toArray();
+      backupTables[name] = documents;
+    }
+
+    const backup = {
+      app: 'SNK Friends Cricket Mega Auction',
+      version: 2,
+      type: 'automatic-pre-reset-backup',
+      created_at: now().toISOString(),
+      tables: backupTables
+    };
+
+    const db = await dbPromise;
+
+    for (const name of collectionNames) {
+      await db.collection(name).deleteMany({});
+    }
+
+    await db.collection('counters').deleteMany({});
+
+    await seedTeamsIfEmpty();
+
+    io.emit('auction:update');
+
+    io.emit('broadcast:state', {
+      status: 'AUCTION LIVE',
+      player: 'Waiting for next player',
+      details: ''
+    });
+
+    return res.json({
+      ok: true,
+      message: 'All auction data cleared. Default 14 teams recreated.',
+      backup
+    });
+
+  } catch (error) {
+    console.error('Reset error:', error);
+
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
 });
 
+// Restore remains disabled
 app.all('/api/restore', (req, res) => {
   return res.status(403).json({
     ok: false,
-    error: 'Restore operation is disabled for data protection.'
+    error: 'Restore operation is disabled.'
   });
 });
 
