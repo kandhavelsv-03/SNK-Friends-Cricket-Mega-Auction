@@ -31,12 +31,33 @@ html,body{margin:0;min-height:100%;background:#050914;color:#fff;font-family:Ari
   <div class="viewer-details" id="viewerDetails">The auction will appear here when the admin starts.</div>
   <div class="viewer-foot">OFFICIAL VIEWER SCREEN · SNK FRIENDS</div>
 </div>
-<script src="/socket.io/socket.io.js"></script>
 <script>
-const socket=typeof io==="function"?io():null;
-const logos={SS:"ss",DCS:"dcs",BCS:"dcs",BR:"br","7SV":"7sv","7SB":"7sv","7S":"7sv",KD2:"kd2",KDSQUARE:"kd2",ARC:"arc",KCG:"kcg",RH:"rh",CC:"cc",BBC:"bbc",FCK:"fck",VTK:"vtk",AKS:"aks",TG:"tg"};
-function renderBroadcast(s){
- document.getElementById("viewerPlayer").textContent=s.player||"Waiting for next player";
+async function refreshBroadcast(){
+  try{
+    const r=await fetch('/api/broadcast/state',{cache:'no-store'});
+    if(!r.ok)return;
+    const s=await r.json();
+    document.getElementById('viewerPlayer').textContent=s.player||'';
+    const status=document.getElementById('viewerStatus');
+    status.textContent=s.status||'AUCTION LIVE';
+    status.className='viewer-status '+(s.status==='SOLD'?'sold':s.status==='UNSOLD'?'unsold':'');
+    const details=document.getElementById('viewerDetails');
+    details.textContent=s.details||'';
+    if(s.status==='SOLD' && s.teamShort){
+      const raw=String(s.teamShort).trim().toUpperCase().replace(/\s+/g,'').replace(/[²^]/g,'2');
+      const logos={SS:'ss',DCS:'dcs',BCS:'dcs',BR:'br','7SV':'7sv','7SB':'7sv','7S':'7sv',KD2:'kd2',KDSQUARE:'kd2',ARC:'arc',KCG:'kcg',RH:'rh',CC:'cc',BBC:'bbc',FCK:'fck',VTK:'vtk',AKS:'aks',TG:'tg'};
+      const key=logos[raw];
+      details.innerHTML=(key?`<img class="viewer-team-logo" src="/assets/team-${key}.webp" alt="${raw} team logo">`:'')+`<span>${String(s.details||'').replace(/[<>]/g,'')}</span>`;
+    }
+  }catch(e){console.warn('Broadcast refresh failed',e);}
+}
+refreshBroadcast();
+setInterval(refreshBroadcast,1500);
+</script>
+<script>
+const socket=io();
+socket.on("broadcast:state",s=>{
+ document.getElementById("viewerPlayer").textContent=s.player||"";
  const status=document.getElementById("viewerStatus");
  status.textContent=s.status||"AUCTION LIVE";
  status.className="viewer-status "+(s.status==="SOLD"?"sold":s.status==="UNSOLD"?"unsold":"");
@@ -44,14 +65,10 @@ function renderBroadcast(s){
  details.textContent=s.details||"";
  if(s.status==="SOLD" && s.teamShort){
    const raw=String(s.teamShort).trim().toUpperCase().replace(/\s+/g,"").replace(/[²^]/g,"2");
+   const logos={SS:"ss",DCS:"dcs",BCS:"dcs",BR:"br","7SV":"7sv","7SB":"7sv","7S":"7sv",KD2:"kd2",KDSQUARE:"kd2",ARC:"arc",KCG:"kcg",RH:"rh",CC:"cc",BBC:"bbc",FCK:"fck",VTK:"vtk",AKS:"aks",TG:"tg"};
    const key=logos[raw];
-   details.textContent="";
-   if(key){const img=document.createElement("img");img.className="viewer-team-logo";img.src=`/assets/team-${key}.webp`;img.alt=raw+" team logo";details.appendChild(img);}
-   const span=document.createElement("span");span.textContent=s.details||"";details.appendChild(span);
+   details.innerHTML=(key?`<img class="viewer-team-logo" src="/assets/team-${key}.webp" alt="${raw} team logo">`:"")+`<span>${s.details||""}</span>`;
  }
-}
-if(socket)socket.on("broadcast:state",renderBroadcast);
-async function refreshBroadcast(){try{const r=await fetch("/api/broadcast/state",{cache:"no-store"});if(r.ok)renderBroadcast(await r.json());}catch(_){}}
-refreshBroadcast();setInterval(refreshBroadcast,1500);
+});
 </script>
 </body></html>

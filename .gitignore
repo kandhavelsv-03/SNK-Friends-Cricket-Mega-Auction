@@ -1,6 +1,11 @@
+
 node_modules/
 .env
-.env.*.local
+.env.*
+!.env.example
 *.log
 .DS_Store
-npm-debug.log*
+
+.vs/
+*.backup.json
+server.mysql-backup.js

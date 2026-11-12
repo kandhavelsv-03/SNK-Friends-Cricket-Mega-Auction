@@ -1,4 +1,6 @@
+
 'use strict';
+
 require('dotenv').config();
 
 const express = require('express');
@@ -6,654 +8,1898 @@ const http = require('http');
 const path = require('path');
 const cors = require('cors');
 const session = require('express-session');
-const MongoStore = require('connect-mongo');
+
+const MongoStoreModule = require('connect-mongo');
+const MongoStore = MongoStoreModule.default || MongoStoreModule.MongoStore;
+
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { MongoClient } = require('mongodb');
 const { Server } = require('socket.io');
-const { TEAM_CONFIG, money, effectiveOverseas, validateSquadAddition, calculateTradePurses } = require('./lib/auction-rules');
+const { TEAM_CONFIG } = require('./lib/auction-rules');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: true, credentials: true } });
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-const MONGODB_URI = process.env.MONGODB_URI;
-const DB_NAME = process.env.MONGODB_DB_NAME || 'cricket_auction';
-if (!MONGODB_URI) console.warn('MONGODB_URI is not configured. Set it in your environment before starting the app.');
+const io = new Server(server, {
+  cors: { origin: true, credentials: true }
+});
 
-let mongoClient;
-let db;
-let dbPromise;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
 
-async function connectDB() {
-  if (db) return db;
-  if (!MONGODB_URI) throw new Error('MONGODB_URI is required. Configure your MongoDB Atlas connection string.');
-  if (!dbPromise) {
-    dbPromise = (async () => {
-      mongoClient = new MongoClient(MONGODB_URI, {
-        maxPoolSize: Number(process.env.MONGODB_MAX_POOL_SIZE || 10),
-        serverSelectionTimeoutMS: Number(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || 10000)
-      });
-      await mongoClient.connect();
-      db = mongoClient.db(DB_NAME);
-      await ensureIndexes();
-      await seedTeamsIfEmpty();
-      return db;
-    })().catch(error => { dbPromise = null; throw error; });
+const mongoUri = process.env.MONGODB_URI;
+const dbName = process.env.MONGODB_DB_NAME || 'cricket_auction';
+
+if (!mongoUri) console.warn('MONGODB_URI is not configured.');
+
+const client = new MongoClient(
+  mongoUri || 'mongodb://127.0.0.1:27017',
+  {
+    maxPoolSize: Number(process.env.MONGODB_MAX_POOL_SIZE || 10),
+    serverSelectionTimeoutMS: Number(
+      process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || 10000
+    )
   }
-  return dbPromise;
-}
+);
+
+const clientPromise = client.connect();
+const dbPromise = clientPromise.then(c => c.db(dbName));
+
+const col = async name => (await dbPromise).collection(name);
+const money = n => Number(Number(n).toFixed(2));
+const now = () => new Date();
+
+const effectiveOverseas = counts =>
+  counts.Overseas + Math.max(0, counts.Associate - 2);
+
+
+// INDEXES
 
 async function ensureIndexes() {
-  try { await db.createCollection('players'); } catch (error) { if (error.code !== 48 && error.codeName !== 'NamespaceExists') throw error; }
-  // A prior experimental migration may have created a unique normalized-name index.
-  // Keep a regular index instead so all source workbook rows (including same-name rows) survive import.
-  const playerIndexes = await db.collection('players').listIndexes().toArray();
-  const normalizedNameIndex = playerIndexes.find(index => index.key?.name_normalized === 1);
-  if (normalizedNameIndex?.unique) await db.collection('players').dropIndex(normalizedNameIndex.name);
+  const db = await dbPromise;
+
   await Promise.all([
-    db.collection('teams').createIndex({ id: 1 }, { unique: true }),
-    db.collection('teams').createIndex({ name: 1 }, { unique: true }),
     db.collection('players').createIndex({ id: 1 }, { unique: true }),
-    db.collection('players').createIndex({ name_normalized: 1 }),
     db.collection('players').createIndex({ status: 1, name: 1 }),
-    db.collection('team_squads').createIndex({ id: 1 }, { unique: true }),
-    db.collection('team_squads').createIndex({ player_id: 1 }, { unique: true }),
-    db.collection('team_squads').createIndex({ team_id: 1 }),
-    db.collection('auction_bids').createIndex({ id: 1 }, { unique: true }),
-    db.collection('auction_bids').createIndex({ player_id: 1, amount: -1 }),
-    db.collection('trades').createIndex({ id: 1 }, { unique: true }),
-    db.collection('auction_events').createIndex({ id: 1 }, { unique: true }),
-    db.collection('auction_events').createIndex({ player_id: 1, id: -1 }),
-    
+    db.collection('players').createIndex({ name_normalized: 1 }),
+
+    db.collection('teams').createIndex({ id: 1 }, { unique: true }),
+    db.collection('teams').createIndex(
+      { short_name: 1 },
+      { unique: true, sparse: true }
+    ),
+
+    db.collection('team_squads').createIndex(
+      { player_id: 1 },
+      { unique: true }
+    ),
+
+    db.collection('auction_bids').createIndex({
+      player_id: 1,
+      amount: -1,
+      id: -1
+    }),
+
+    db.collection('auction_events').createIndex({ id: -1 }),
+    db.collection('trades').createIndex({ id: -1 })
   ]);
+
+  // Preserve existing numeric IDs.
+  for (const name of [
+    'players',
+    'teams',
+    'team_squads',
+    'auction_bids',
+    'trades',
+    'auction_events'
+  ]) {
+    const last = await db.collection(name)
+      .find({ id: { $type: 'number' } })
+      .sort({ id: -1 })
+      .limit(1)
+      .next();
+
+    if (last) {
+      await db.collection('counters').updateOne(
+        { _id: name },
+        { $max: { seq: Number(last.id) } },
+        { upsert: true }
+      );
+    }
+  }
 }
 
-async function nextId(counterName, count = 1, mongoSession) {
-  if (!Number.isInteger(count) || count < 1) throw new Error('Invalid ID allocation count');
-  const result = await db.collection('counters').findOneAndUpdate(
-    { _id: counterName }, { $inc: { seq: count } },
-    { upsert: true, returnDocument: 'after', ...(mongoSession ? { session: mongoSession } : {}) }
-  );
-  const last = result && result.seq;
-  return count === 1 ? last : { first: last - count + 1, last };
-}
 
-async function setCounter(counterName, seq, mongoSession) {
-  await db.collection('counters').updateOne({ _id: counterName }, { $set: { seq } }, { upsert: true, ...(mongoSession ? { session: mongoSession } : {}) });
-}
+// SEED TEAMS
 
 async function seedTeamsIfEmpty() {
-  const teams = db.collection('teams');
-  const meta = db.collection('app_meta');
-  if (await teams.countDocuments() > 0) {
-    await meta.updateOne({ _id: 'snk_default_teams_seeded' }, { $set: { value: true } }, { upsert: true });
-    return;
+  const teams = await col('teams');
+
+  if (await teams.countDocuments() > 0) return;
+
+  for (const [shortName, purse] of TEAM_CONFIG) {
+    const id = await nextId('teams');
+
+    const displayName = shortName === 'KD2' ? 'KD²' : shortName;
+
+    await teams.insertOne({
+      id,
+      name: displayName,
+      short_name: shortName,
+      logo_url: `/assets/team-${shortName.toLowerCase()}.webp`,
+      initial_purse: purse,
+      remaining_purse: purse,
+      indian_rtm: 3,
+      overseas_rtm: 3,
+      created_at: now()
+    });
   }
-  // Older builds left this marker behind after an empty database was created.
-  // Only an explicit Reset All Data operation should suppress the default teams.
-  if (await meta.findOne({ _id: 'snk_explicit_empty_reset', value: true })) return;
-  const docs = TEAM_CONFIG.map(([code, purse], index) => ({
-    id: index + 1, name: code, short_name: code, logo_url: '',
-    initial_purse: purse, remaining_purse: purse, indian_rtm: 3, overseas_rtm: 3,
-    created_at: new Date()
-  }));
-  await teams.insertMany(docs, { ordered: true });
-  await setCounter('teams', docs.length);
-  await meta.updateOne({ _id: 'snk_default_teams_seeded' }, { $set: { value: true } }, { upsert: true });
-  console.log(`Seeded ${docs.length} SNK teams.`);
 }
 
-async function getDb() { return connectDB(); }
-const C = name => db.collection(name);
-const parseId = value => {
-  const id = Number(value);
-  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Invalid record ID');
-  return id;
-};
-const normalizeName = value => String(value || '').trim().toLocaleLowerCase('en');
-const safeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const createdAt = value => value instanceof Date ? value : (value ? new Date(value) : new Date());
 
-async function getTeamState(teamId, mongoSession) {
-  const opts = mongoSession ? { session: mongoSession } : {};
-  const team = await C('teams').findOne({ id: parseId(teamId) }, opts);
-  if (!team) throw new Error('Team not found');
-  const squad = await C('team_squads').find({ team_id: team.id }, opts).toArray();
-  const playerIds = squad.map(row => row.player_id);
-  const players = playerIds.length ? await C('players').find({ id: { $in: playerIds } }, opts).toArray() : [];
-  const counts = { Indian: 0, Overseas: 0, Associate: 0 };
-  for (const player of players) if (Object.prototype.hasOwnProperty.call(counts, player.category)) counts[player.category]++;
-  const total = counts.Indian + counts.Overseas + counts.Associate;
-  return { team, counts, total, effOverseas: effectiveOverseas(counts) };
+// AUTO ID
+
+async function nextId(name) {
+  const c = await col('counters');
+
+  const doc = await c.findOneAndUpdate(
+    { _id: name },
+    { $inc: { seq: 1 } },
+    { upsert: true, returnDocument: 'after' }
+  );
+
+  return Number(doc.seq);
 }
 
-async function validateAddition(teamId, player, amount, mongoSession) {
-  const state = await getTeamState(teamId, mongoSession);
-  validateSquadAddition(state.counts, state.team.remaining_purse, amount, player.category);
-  return state;
-}
 
-async function addPlayerToTeam(teamId, player, amount, type, mongoSession) {
-  const state = await validateAddition(teamId, player, amount, mongoSession);
-  const opts = mongoSession ? { session: mongoSession } : {};
-  const amt = money(amount);
-  await C('teams').updateOne({ id: state.team.id }, { $inc: { remaining_purse: -amt } }, opts);
-  await C('team_squads').insertOne({
-    id: await nextId('team_squads', 1, mongoSession), team_id: state.team.id, player_id: player.id,
-    amount: amt, acquisition_type: type, created_at: new Date()
-  }, opts);
-  await C('players').updateOne({ id: player.id }, { $set: {
-    status: type === 'Retention' ? 'RETAINED' : 'SOLD', current_team_id: state.team.id,
-    sold_price: amt, acquisition_type: type
-  } }, opts);
-}
+// TRANSACTIONS
 
-async function insertEvent({ player_id = null, team_id = null, event_type, amount = null, details = null }, mongoSession) {
-  const doc = { id: await nextId('auction_events', 1, mongoSession), player_id, team_id, event_type, amount, details, created_at: new Date() };
-  await C('auction_events').insertOne(doc, mongoSession ? { session: mongoSession } : {});
-  return doc;
-}
+async function withTransaction(work) {
+  const c = await clientPromise;
+  const session = c.startSession();
 
-async function inTransaction(work) {
-  await getDb();
-  const mongoSession = mongoClient.startSession();
+  let result;
+
   try {
-    let result;
-    await mongoSession.withTransaction(async () => { result = await work(mongoSession); });
+    await session.withTransaction(async () => {
+      result = await work(session);
+    });
+
     return result;
-  } finally { await mongoSession.endSession(); }
+  } finally {
+    await session.endSession();
+  }
 }
 
-function handleError(res, error, status = 400) {
-  if (res.headersSent) return;
-  res.status(status).json({ error: error && error.message ? error.message : 'Unexpected server error' });
+
+// TEAM STATE
+
+async function getTeamState(teamId, session) {
+  const teams = await col('teams');
+
+  const team = await teams.findOne(
+    { id: Number(teamId) },
+    { session }
+  );
+
+  if (!team) throw new Error('Team not found');
+
+  const squad = await (await col('team_squads'))
+    .find({ team_id: Number(teamId) }, { session })
+    .toArray();
+
+  const playerIds = squad.map(x => x.player_id);
+
+  const players = playerIds.length
+    ? await (await col('players'))
+        .find({ id: { $in: playerIds } }, { session })
+        .toArray()
+    : [];
+
+  const counts = {
+    Indian: 0,
+    Overseas: 0,
+    Associate: 0
+  };
+
+  players.forEach(p => {
+    if (counts[p.category] !== undefined) {
+      counts[p.category]++;
+    }
+  });
+
+  const total =
+    counts.Indian + counts.Overseas + counts.Associate;
+
+  return {
+    team,
+    counts,
+    total,
+    effOverseas: effectiveOverseas(counts)
+  };
 }
 
-app.set('trust proxy', 1);
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true }));
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'change-this-secret-before-deploying',
-  resave: false, saveUninitialized: false,
-  store: MONGODB_URI ? MongoStore.create({ mongoUrl: MONGODB_URI, dbName: DB_NAME, collectionName: 'sessions', ttl: 14 * 24 * 60 * 60 }) : undefined,
-  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' }
-}));
-app.use(express.static(path.join(__dirname, 'public')));
+
+// SQUAD VALIDATION
+
+async function validateAddition(teamId, player, amount, session) {
+  const s = await getTeamState(teamId, session);
+  const amt = money(amount);
+
+  if (!Number.isFinite(amt) || amt < 0) {
+    throw new Error('Invalid amount');
+  }
+
+  if (Number(s.team.remaining_purse) + 0.0001 < amt) {
+    throw new Error('Insufficient purse');
+  }
+
+  if (s.total >= 20) {
+    throw new Error('Maximum squad size is 20');
+  }
+
+  const next = {
+    ...s.counts,
+    [player.category]: s.counts[player.category] + 1
+  };
+
+  const nextEff = effectiveOverseas(next);
+
+  if (next.Indian > 9) {
+    throw new Error('Indian maximum is 9');
+  }
+
+  if (nextEff > 9) {
+    throw new Error('Effective Overseas maximum is 9');
+  }
+
+  if (next.Associate > 11) {
+    throw new Error(
+      'Maximum Associate player count is 11 (2 dedicated + 9 overseas slots)'
+    );
+  }
+
+  if (s.total + 1 === 20) {
+    if (next.Indian < 8) {
+      throw new Error('A 20-player squad must contain at least 8 Indian players');
+    }
+
+    if (nextEff < 8) {
+      throw new Error(
+        'A 20-player squad must contain at least 8 Overseas-equivalent players'
+      );
+    }
+
+    if (next.Associate < 1) {
+      throw new Error(
+        'A 20-player squad must contain at least 1 Associate player'
+      );
+    }
+  }
+
+  return s;
+}
+
+
+// ADD PLAYER TO TEAM
+
+async function addPlayerToTeam(teamId, player, amount, type, session) {
+  await validateAddition(teamId, player, amount, session);
+
+  const amt = money(amount);
+
+  await (await col('teams')).updateOne(
+    { id: Number(teamId) },
+    { $inc: { remaining_purse: -amt } },
+    { session }
+  );
+
+  await (await col('team_squads')).insertOne({
+    id: await nextId('team_squads'),
+    team_id: Number(teamId),
+    player_id: Number(player.id),
+    amount: amt,
+    acquisition_type: type,
+    created_at: now()
+  }, { session });
+
+  await (await col('players')).updateOne(
+    { id: Number(player.id) },
+    {
+      $set: {
+        status: type === 'Retention' ? 'RETAINED' : 'SOLD',
+        current_team_id: Number(teamId),
+        sold_price: amt,
+        acquisition_type: type
+      }
+    },
+    { session }
+  );
+}
+
+
+// AUCTION EVENT
+
+async function addEvent(data, session) {
+  await (await col('auction_events')).insertOne({
+    id: await nextId('auction_events'),
+    player_id: data.player_id ?? null,
+    team_id: data.team_id ?? null,
+    event_type: data.event_type,
+    amount: data.amount ?? null,
+    details: data.details || null,
+    created_at: now()
+  }, { session });
+}
+
+
+// SOCKET.IO
 
 io.on('connection', socket => {
-  socket.on('broadcast:state', async payload => {
+  socket.on('broadcast:state', payload => {
     if (!payload || typeof payload !== 'object') return;
+
     const safe = {
       status: String(payload.status || 'AUCTION LIVE').slice(0, 24),
       player: String(payload.player || 'Waiting for next player').slice(0, 150),
       details: String(payload.details || '').slice(0, 250),
       teamShort: String(payload.teamShort || '').slice(0, 20),
       amount: String(payload.amount || '').slice(0, 30),
-      updated_at: new Date()
+      teamLogo: payload.teamShort === 'BR'
+        ? '/assets/br-bulls-logo.png'
+        : ''
     };
-    try { await getDb(); await C('broadcast_state').updateOne({ _id: 'current' }, { $set: safe }, { upsert: true }); } catch (error) { console.error('Broadcast state persistence failed:', error.message); }
+
     socket.broadcast.emit('broadcast:state', safe);
   });
 });
 
-app.get('/api/health', async (_, res) => {
-  try { await getDb(); res.json({ ok: true, database: 'MongoDB Atlas', db: DB_NAME }); }
-  catch (error) { handleError(res, error, 503); }
-});
 
-app.get('/api/teams', async (_, res) => {
+// MIDDLEWARE
+
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'development-only-change-me',
+  resave: false,
+  saveUninitialized: false,
+  store: MongoStore.create({
+    clientPromise,
+    dbName,
+    collectionName: 'sessions',
+    ttl: 14 * 24 * 60 * 60
+  }),
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production'
+  }
+}));
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+// BROADCAST STATE
+
+app.get('/api/broadcast/state', async (_req, res) => {
   try {
-    await getDb();
-    const teams = await C('teams').find({}).sort({ name: 1 }).toArray();
-    const output = [];
-    for (const team of teams) {
-      const state = await getTeamState(team.id);
-      output.push({ ...team, squad_size: state.total, indian_count: state.counts.Indian,
-        overseas_count: state.counts.Overseas, associate_count: state.counts.Associate,
-        effective_overseas: state.effOverseas, spent: money(team.initial_purse - team.remaining_purse) });
-    }
-    res.json(output);
-  } catch (error) { handleError(res, error, 500); }
-});
+    const state = await (await col('broadcast_state'))
+      .findOne({ _id: 'current' });
 
-app.post('/api/teams', async (req, res) => {
-  try {
-    await getDb();
-    const name = String(req.body.name || '').trim();
-    if (!name) throw new Error('Team name required');
-    const id = await nextId('teams');
-    const purse = Number.isFinite(Number(req.body.initial_purse)) ? money(req.body.initial_purse) : 90;
-    await C('teams').insertOne({ id, name, short_name: String(req.body.short_name || '').trim(),
-      logo_url: String(req.body.logo_url || ''), initial_purse: purse, remaining_purse: purse,
-      indian_rtm: 3, overseas_rtm: 3, created_at: new Date() });
-    io.emit('auction:update'); res.json({ id, name });
-  } catch (error) { handleError(res, error); }
-});
-
-app.get('/api/players', async (req, res) => {
-  try {
-    await getDb();
-    const query = {};
-    if (req.query.status) query.status = String(req.query.status);
-    if (req.query.category) query.category = String(req.query.category);
-    if (req.query.role) query.role = String(req.query.role);
-    if (req.query.search) query.name = { $regex: safeRegex(req.query.search), $options: 'i' };
-    const rows = await C('players').find(query).sort({ name: 1 }).toArray();
-    const teamIds = [...new Set(rows.map(player => player.current_team_id).filter(Boolean))];
-    const teamRows = teamIds.length ? await C('teams').find({ id: { $in: teamIds } }).toArray() : [];
-    const teamMap = new Map(teamRows.map(team => [team.id, team.name]));
-    res.json(rows.map(player => ({ ...player, current_team: teamMap.get(player.current_team_id) || null })));
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.post('/api/players', async (req, res) => {
-  try {
-    await getDb();
-    const p = req.body || {};
-    if (!String(p.name || '').trim() || !['Indian', 'Overseas', 'Associate'].includes(p.category)) throw new Error('Player name and valid category required');
-    const name = String(p.name).trim();
-    const id = await nextId('players');
-    await C('players').insertOne({ id, name, name_normalized: normalizeName(name), country: String(p.country || ''),
-      category: p.category, role: p.role || 'Batter', previous_price: money(p.previous_price || 0),
-      previous_team: String(p.previous_team || ''), base_price: money(p.base_price || 0.5),
-      photo_url: p.photo_url || null, status: 'AVAILABLE', current_team_id: null,
-      sold_price: null, acquisition_type: null, created_at: new Date() });
-    io.emit('auction:update'); res.json({ id });
-  } catch (error) { handleError(res, error); }
-});
-
-async function importTeamCodes(workbook) {
-  const sheet = workbook.Sheets['Team Code Reference'];
-  if (!sheet) return { teamsImported: 0, teamsSkipped: 0 };
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-  const codes = [...new Set(rows.map(row => String(row['Previous Team Code'] || '').trim()).filter(Boolean))];
-  const current = await C('teams').find({ short_name: { $in: codes } }).toArray();
-  const currentCodes = new Set(current.map(team => team.short_name));
-  // Historical/previous-season codes are references, not additional auction franchises.
-  return { teamsImported: 0, teamsSkipped: codes.filter(code => currentCodes.has(code)).length };
-}
-
-app.post('/api/import', upload.single('file'), async (req, res) => {
-  try {
-    await getDb();
-    if (!req.file) throw new Error('Choose an Excel file');
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const sheet = workbook.Sheets['Player Import'] || workbook.Sheets[workbook.SheetNames[0]];
-    if (!sheet) throw new Error('No player worksheet found');
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-    const teamImport = await importTeamCodes(workbook);
-    const existing = await C('players').find({}, { projection: { name_normalized: 1 } }).toArray();
-    const names = new Set(existing.map(row => row.name_normalized || normalizeName(row.name)));
-    const pending = [];
-    let skipped = 0;
-    for (const row of rows) {
-      const norm = {};
-      Object.keys(row).forEach(key => { norm[key.toLowerCase().trim().replace(/[^a-z0-9]/g, '')] = row[key]; });
-      const rawName = norm.playername || norm.name || norm.player;
-      const name = String(rawName || '').trim();
-      if (!name) { skipped++; continue; }
-      const category = String(norm.category || norm.countrycategory || norm.type || '').trim();
-      if (!['Indian', 'Overseas', 'Associate'].includes(category)) { skipped++; continue; }
-      const normalized = normalizeName(name);
-      if (names.has(normalized)) { skipped++; continue; }
-      const role = String(norm.role || norm.playerrole || 'Batter').trim();
-      const previousPrice = Number(norm.previousprice || norm.previoussoldprice || norm.soldprice || 0);
-      const baseRaw = norm.baseprice;
-      const basePrice = baseRaw === undefined || baseRaw === '' ? 0.5 : Number(String(baseRaw).replace(/[₹,]/g, '').replace(/\s*Cr\s*/i, '').replace(/C$/i, ''));
-      const previousTeam = String(norm.previousteam || norm.team || '').trim();
-      const country = String(norm.country || category);
-      const photoUrl = String(norm.photourl || norm.photo || norm.imageurl || '').trim();
-      pending.push({ name, name_normalized: normalized, country, category,
-        role: ['Batter', 'Batting All-Rounder', 'Bowling All-Rounder', 'Bowler', 'Wicket Keeper'].includes(role) ? role : 'Batter',
-        previous_price: Number.isFinite(previousPrice) ? money(previousPrice) : 0, previous_team: previousTeam,
-        base_price: Number.isFinite(basePrice) && basePrice > 0 ? money(basePrice) : 0.5,
-        photo_url: photoUrl || null, status: 'AVAILABLE', current_team_id: null,
-        sold_price: null, acquisition_type: null, created_at: new Date() });
-    }
-    if (pending.length) {
-      const range = await nextId('players', pending.length);
-      pending.forEach((player, index) => { player.id = range.first + index; });
-      await C('players').insertMany(pending, { ordered: true });
-    }
-    io.emit('auction:update');
-    res.json({ imported: pending.length, skipped, ...teamImport });
-  } catch (error) { handleError(res, error); }
-});
-
-app.post('/api/retention', async (req, res) => {
-  try {
-    await inTransaction(async mongoSession => {
-      const playerId = parseId(req.body.player_id), teamId = parseId(req.body.team_id), amount = req.body.amount;
-      const player = await C('players').findOne({ id: playerId, status: 'AVAILABLE' }, { session: mongoSession });
-      if (!player) throw new Error('Player is not available for retention');
-      const team = await C('teams').findOne({ id: teamId }, { session: mongoSession });
-      if (!team) throw new Error('Team not found');
-      if (!player.previous_team || player.previous_team.trim().toLowerCase() !== team.name.trim().toLowerCase()) throw new Error("A player can only be retained by their previous-season team");
-      const field = player.category === 'Indian' ? 'indian_rtm' : 'overseas_rtm';
-      if (team[field] <= 0) throw new Error('No matching RTM entitlement remains for this category');
-      await addPlayerToTeam(teamId, player, amount, 'Retention', mongoSession);
-      await C('teams').updateOne({ id: teamId }, { $inc: { [field]: -1 } }, { session: mongoSession });
-      await insertEvent({ player_id: playerId, team_id: teamId, event_type: 'RETENTION', amount: money(amount) }, mongoSession);
-    });
-    io.emit('auction:update'); res.json({ ok: true });
-  } catch (error) { handleError(res, error); }
-});
-
-app.post('/api/release', async (req, res) => {
-  try {
-    await inTransaction(async mongoSession => {
-      const playerId = parseId(req.body.player_id);
-      const result = await C('players').updateOne({ id: playerId, status: 'RETAINED' },
-        { $set: { status: 'AVAILABLE', current_team_id: null, sold_price: null, acquisition_type: null } }, { session: mongoSession });
-      if (!result.matchedCount) throw new Error('Retained player not found');
-      await C('team_squads').deleteOne({ player_id: playerId }, { session: mongoSession });
-      await insertEvent({ player_id: playerId, event_type: 'RELEASE' }, mongoSession);
-    });
-    io.emit('auction:update'); res.json({ ok: true });
-  } catch (error) { handleError(res, error); }
-});
-
-app.post('/api/trade', async (req, res) => {
-  try {
-    const result = await inTransaction(async mongoSession => {
-      const playerId = parseId(req.body.player_id), sellerId = parseId(req.body.from_team_id), buyerId = parseId(req.body.to_team_id);
-      if (sellerId === buyerId) throw new Error('Choose a different buying team');
-      const player = await C('players').findOne({ id: playerId, current_team_id: sellerId }, { session: mongoSession });
-      if (!player) throw new Error('Player does not belong to selling team');
-      const teams = await C('teams').find({ id: { $in: [sellerId, buyerId] } }, { session: mongoSession }).toArray();
-      const seller = teams.find(team => team.id === sellerId), buyer = teams.find(team => team.id === buyerId);
-      if (!seller) throw new Error('Seller team not found');
-      if (!buyer) throw new Error('Buyer team not found');
-      const purse = calculateTradePurses(buyer.remaining_purse, seller.remaining_purse, req.body.amount);
-      await validateAddition(buyerId, player, req.body.amount, mongoSession);
-      await C('team_squads').deleteOne({ player_id: playerId }, { session: mongoSession });
-      // Debit the buyer and credit the seller by the same trade amount.
-      await C('teams').updateOne({ id: buyerId }, { $inc: { remaining_purse: -purse.buyer_purse_deducted } }, { session: mongoSession });
-      await C('teams').updateOne({ id: sellerId }, { $inc: { remaining_purse: purse.seller_purse_credited } }, { session: mongoSession });
-      await C('team_squads').insertOne({ id: await nextId('team_squads', 1, mongoSession), team_id: buyerId, player_id: playerId,
-        amount: purse.buyer_purse_deducted, acquisition_type: 'Trade', created_at: new Date() }, { session: mongoSession });
-      await C('players').updateOne({ id: playerId }, { $set: { current_team_id: buyerId,
-        sold_price: purse.buyer_purse_deducted, acquisition_type: 'Trade' } }, { session: mongoSession });
-      await C('trades').insertOne({ id: await nextId('trades', 1, mongoSession), player_id: playerId, from_team_id: sellerId,
-        to_team_id: buyerId, amount: purse.buyer_purse_deducted, created_at: new Date() }, { session: mongoSession });
-      await insertEvent({ player_id: playerId, team_id: buyerId, event_type: 'TRADE', amount: purse.buyer_purse_deducted,
-        details: { from_team_id: sellerId, to_team_id: buyerId, buyer_purse_deduction: true, seller_purse_credit: true } }, mongoSession);
-      return { ok: true, amount: purse.buyer_purse_deducted, ...purse };
-    });
-    io.emit('auction:update'); res.json(result);
-  } catch (error) { handleError(res, error); }
-});
-
-app.post('/api/bid', async (req, res) => {
-  try {
-    await getDb();
-    const playerId = parseId(req.body.player_id), teamId = parseId(req.body.team_id);
-    const player = await C('players').findOne({ id: playerId, status: 'AVAILABLE' });
-    if (!player) throw new Error('Player is not available');
-    await validateAddition(teamId, player, req.body.amount);
-    const amount = money(req.body.amount);
-    await C('auction_bids').insertOne({ id: await nextId('auction_bids'), player_id: playerId,
-      team_id: teamId, amount, created_at: new Date() });
-    const team = await C('teams').findOne({ id: teamId }, { projection: { name: 1 } });
-    if (!team) throw new Error('Team not found');
-    io.emit('auction:bid', { player_id: playerId, team_id: teamId, team: team.name, amount });
-    res.json({ ok: true });
-  } catch (error) { handleError(res, error); }
-});
-
-app.post('/api/sold', async (req, res) => {
-  try {
-    await inTransaction(async mongoSession => {
-      const playerId = parseId(req.body.player_id), teamId = parseId(req.body.team_id);
-      const player = await C('players').findOne({ id: playerId, status: 'AVAILABLE' }, { session: mongoSession });
-      if (!player) throw new Error('Player is not available');
-      await addPlayerToTeam(teamId, player, req.body.amount, 'Auction', mongoSession);
-      await insertEvent({ player_id: playerId, team_id: teamId, event_type: 'SOLD', amount: money(req.body.amount) }, mongoSession);
-    });
-    io.emit('auction:update'); res.json({ ok: true });
-  } catch (error) { handleError(res, error); }
-});
-
-app.post('/api/unsold', async (req, res) => {
-  try {
-    await getDb();
-    const playerId = parseId(req.body.player_id);
-    const result = await C('players').updateOne({ id: playerId, status: 'AVAILABLE' },
-      { $set: { status: 'UNSOLD', current_team_id: null } });
-    if (!result.matchedCount) throw new Error('Player is not available');
-    await insertEvent({ player_id: playerId, event_type: 'UNSOLD' });
-    io.emit('auction:update'); res.json({ ok: true });
-  } catch (error) { handleError(res, error); }
-});
-
-app.post('/api/reauction', async (req, res) => {
-  try {
-    await getDb();
-    const result = await C('players').updateOne({ id: parseId(req.body.player_id), status: 'UNSOLD' }, { $set: { status: 'AVAILABLE' } });
-    if (!result.matchedCount) throw new Error('Player is not unsold');
-    io.emit('auction:update'); res.json({ ok: true });
-  } catch (error) { handleError(res, error); }
-});
-
-app.post('/api/rtm', async (req, res) => {
-  try {
-    await inTransaction(async mongoSession => {
-      const playerId = parseId(req.body.player_id), teamId = parseId(req.body.team_id);
-      const player = await C('players').findOne({ id: playerId, status: 'AVAILABLE' }, { session: mongoSession });
-      if (!player) throw new Error('Player is not available');
-      if (!player.previous_team) throw new Error('Previous team is not recorded; RTM eligibility cannot be verified');
-      const team = await C('teams').findOne({ id: teamId, name: new RegExp(`^${safeRegex(player.previous_team.trim())}$`, 'i') }, { session: mongoSession });
-      if (!team) throw new Error("Only the player's previous team can use RTM");
-      const field = player.category === 'Indian' ? 'indian_rtm' : 'overseas_rtm';
-      if (team[field] <= 0) throw new Error('No eligible RTM card remains');
-      await addPlayerToTeam(teamId, player, req.body.amount, 'RTM', mongoSession);
-      await C('teams').updateOne({ id: teamId }, { $inc: { [field]: -1 } }, { session: mongoSession });
-      await insertEvent({ player_id: playerId, team_id: teamId, event_type: 'RTM', amount: money(req.body.amount) }, mongoSession);
-    });
-    io.emit('auction:update'); res.json({ ok: true });
-  } catch (error) { handleError(res, error); }
-});
-
-app.get('/api/player/:id', async (req, res) => {
-  try {
-    await getDb();
-    const playerId = parseId(req.params.id);
-    const player = await C('players').findOne({ id: playerId });
-    if (!player) return res.status(404).json({ error: 'Player not found' });
-    const team = player.current_team_id ? await C('teams').findOne({ id: player.current_team_id }) : null;
-    const bidsRaw = await C('auction_bids').find({ player_id: playerId }).sort({ amount: -1, id: -1 }).limit(10).toArray();
-    const bidTeams = bidsRaw.length ? await C('teams').find({ id: { $in: bidsRaw.map(bid => bid.team_id) } }).toArray() : [];
-    const bidTeamMap = new Map(bidTeams.map(row => [row.id, row]));
-    const bids = bidsRaw.map(bid => ({ ...bid, team_name: bidTeamMap.get(bid.team_id)?.name || '', short_name: bidTeamMap.get(bid.team_id)?.short_name || '' }));
-    const events = await C('auction_events').find({ player_id: playerId }).sort({ id: -1 }).limit(10).toArray();
-    res.json({ player: { ...player, current_team: team?.name || null, current_team_short: team?.short_name || null }, bids, events });
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.get('/api/nomination-queue', async (_, res) => {
-  try {
-    await getDb();
-    const rows = await C('players').find({ status: 'AVAILABLE' }, { projection: { id: 1, name: 1, category: 1, role: 1, base_price: 1, photo_url: 1 } }).sort({ category: 1, role: 1, name: 1 }).toArray();
-    res.json(rows);
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.get('/api/squad/:teamId', async (req, res) => {
-  try {
-    await getDb();
-    const teamId = parseId(req.params.teamId);
-    const squad = await C('team_squads').find({ team_id: teamId }).sort({ id: 1 }).toArray();
-    const playerIds = squad.map(row => row.player_id);
-    const players = playerIds.length ? await C('players').find({ id: { $in: playerIds } }).toArray() : [];
-    const playerMap = new Map(players.map(player => [player.id, player]));
-    res.json(squad.map(row => ({ ...(playerMap.get(row.player_id) || {}), amount: row.amount, acquisition_type: row.acquisition_type }))
-      .filter(player => player.id));
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.get('/api/stats', async (_, res) => {
-  try {
-    await getDb();
-    const [total, available, sold, unsold, retained] = await Promise.all([
-      C('players').countDocuments(), C('players').countDocuments({ status: 'AVAILABLE' }),
-      C('players').countDocuments({ status: 'SOLD' }), C('players').countDocuments({ status: 'UNSOLD' }),
-      C('players').countDocuments({ status: 'RETAINED' })
-    ]);
-    const spending = await C('team_squads').aggregate([{ $group: { _id: null, total_spend: { $sum: '$amount' } } }]).toArray();
-    res.json({ total, available, sold, unsold, retained, total_spend: spending[0]?.total_spend || 0 });
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.get('/api/reports.xlsx', async (_, res) => {
-  try {
-    await getDb();
-    const teams = await C('teams').find({}).sort({ name: 1 }).toArray();
-    const players = await C('players').find({}).sort({ name: 1 }).toArray();
-    const teamMap = new Map(teams.map(team => [team.id, team.name]));
-    const teamLogoPath = team => {
-      const raw = String(team.short_name || team.name || '').trim().toUpperCase().replace(/\s+/g, '').replace(/[²^]/g, '2');
-      const aliases = { BCS: 'dcs', '7SB': '7sv', '7S': '7sv', KDSQUARE: 'kd2' };
-      const code = aliases[raw] || raw.toLowerCase();
-      return `/assets/team-${code}.webp`;
-    };
-    const teamById = new Map(teams.map(team => [team.id, team]));
-    const playerRows = players.map(player => ({ name: player.name, country: player.country, category: player.category,
-      role: player.role, status: player.status, previous_team: player.previous_team, base_price: player.base_price,
-      sold_price: player.sold_price, current_team: teamMap.get(player.current_team_id) || '',
-      current_team_logo_path: teamById.has(player.current_team_id) ? teamLogoPath(teamById.get(player.current_team_id)) : '' }));
-    const trades = await C('trades').find({}).sort({ id: -1 }).toArray();
-    const tradeRows = trades.map(trade => ({ player: players.find(p => p.id === trade.player_id)?.name || '',
-      seller: teamMap.get(trade.from_team_id) || '', buyer: teamMap.get(trade.to_team_id) || '',
-      seller_logo_path: teamById.has(trade.from_team_id) ? teamLogoPath(teamById.get(trade.from_team_id)) : '',
-      buyer_logo_path: teamById.has(trade.to_team_id) ? teamLogoPath(teamById.get(trade.to_team_id)) : '',
-      amount: trade.amount, created_at: trade.created_at }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(teams.map(team => ({ id: team.id, name: team.name,
-      short_name: team.short_name, logo_path: teamLogoPath(team), initial_purse: team.initial_purse, remaining_purse: team.remaining_purse,
-      indian_rtm: team.indian_rtm, overseas_rtm: team.overseas_rtm }))), 'Teams & Purse');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(playerRows), 'Player Register');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tradeRows), 'Trade History');
-    const data = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    res.setHeader('Content-Disposition', 'attachment; filename="SNK_Friends_Auction_Report.xlsx"');
-    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(data);
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.get('/api/backup', async (_, res) => {
-  try {
-    await getDb();
-    const backup = { app: 'SNK Friends Cricket Mega Auction', version: 2, database: 'MongoDB', created_at: new Date().toISOString(), tables: {} };
-    for (const collection of ['teams', 'players', 'team_squads', 'auction_bids', 'trades', 'auction_events']) {
-      backup.tables[collection] = await C(collection).find({}).sort({ id: 1 }).toArray();
-    }
-    res.setHeader('Content-Disposition', 'attachment; filename="SNK_Friends_Auction_Backup.json"');
-    res.json(backup);
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.post('/api/reset-all-data', async (req, res) => {
-  try {
-    if (req.body?.confirm !== 'DELETE ALL DATA') throw new Error('Reset confirmation phrase is required');
-    await inTransaction(async mongoSession => {
-      for (const collection of ['auction_bids', 'trades', 'auction_events', 'team_squads', 'players', 'teams']) {
-        await C(collection).deleteMany({}, { session: mongoSession });
+    res.json(
+      state?.state || {
+        status: 'AUCTION LIVE',
+        player: 'Waiting for next player',
+        details: ''
       }
-      for (const counter of ['auction_bids', 'trades', 'auction_events', 'team_squads', 'players', 'teams']) {
-        await setCounter(counter, 0, mongoSession);
-      }
-      await C('app_meta').updateOne({ _id: 'snk_explicit_empty_reset' }, { $set: { value: true } }, { upsert: true, session: mongoSession });
-    });
-    io.emit('auction:update'); res.json({ ok: true, message: 'All auction data has been removed.' });
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.post('/api/restore', upload.single('file'), async (req, res) => {
-  try {
-    if (req.body?.confirm !== 'RESTORE BACKUP') throw new Error('Type RESTORE BACKUP to confirm');
-    if (!req.file) throw new Error('Choose a backup JSON file');
-    const backup = JSON.parse(req.file.buffer.toString('utf8'));
-    const allowed = ['teams', 'players', 'team_squads', 'auction_bids', 'trades', 'auction_events'];
-    if (!backup.tables || allowed.some(name => !Array.isArray(backup.tables[name]))) throw new Error('Invalid backup format');
-    await inTransaction(async mongoSession => {
-      for (const name of allowed) {
-        await C(name).deleteMany({}, { session: mongoSession });
-        const rows = backup.tables[name].map(row => {
-          const doc = { ...row };
-          delete doc._id;
-          if (doc.created_at) doc.created_at = createdAt(doc.created_at);
-          if (name === 'players' && !doc.name_normalized) doc.name_normalized = normalizeName(doc.name);
-          return doc;
-        });
-        if (rows.length) await C(name).insertMany(rows, { ordered: true, session: mongoSession });
-        await setCounter(name, rows.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0), mongoSession);
-      }
-    });
-    io.emit('auction:update'); res.json({ ok: true, message: 'Backup restored' });
-  } catch (error) { handleError(res, error); }
-});
-
-app.get('/api/latest-team', async (_, res) => {
-  try {
-    await getDb();
-    const event = await C('auction_events').find({ event_type: { $in: ['SOLD', 'RTM', 'RETENTION', 'TRADE'] }, team_id: { $ne: null } }).sort({ id: -1 }).limit(1).next();
-    const team = event ? await C('teams').findOne({ id: event.team_id }, { projection: { id: 1, name: 1 } }) : null;
-    res.json(team || null);
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.get('/api/history', async (_, res) => {
-  try {
-    await getDb();
-    const events = await C('auction_events').find({}).sort({ id: -1 }).limit(200).toArray();
-    const playerIds = [...new Set(events.map(event => event.player_id).filter(Boolean))];
-    const teamIds = [...new Set(events.flatMap(event => [event.team_id, event.details?.from_team_id]).filter(Boolean))];
-    const [players, teams] = await Promise.all([
-      playerIds.length ? C('players').find({ id: { $in: playerIds } }).toArray() : [],
-      teamIds.length ? C('teams').find({ id: { $in: teamIds } }).toArray() : []
-    ]);
-    const playerMap = new Map(players.map(player => [player.id, player.name]));
-    const teamMap = new Map(teams.map(team => [team.id, team.name]));
-    res.json(events.map(event => ({ ...event, player_name: playerMap.get(event.player_id) || null,
-      team_name: teamMap.get(event.team_id) || null,
-      seller_team_name: teamMap.get(event.details?.from_team_id) || null })));
-  } catch (error) { handleError(res, error, 500); }
-});
-
-app.get('/api/broadcast/state', async (_, res) => {
-  try {
-    await getDb();
-    const state = await C('broadcast_state').findOne({ _id: 'current' });
-    res.json(state || { status: 'AUCTION LIVE', player: 'Waiting for next player', details: '', teamShort: '', amount: '' });
-  } catch (error) { handleError(res, error, 500); }
+    );
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/api/broadcast/state', async (req, res) => {
   try {
-    await getDb();
-    const payload = req.body || {};
-    const safe = { status: String(payload.status || 'AUCTION LIVE').slice(0, 24),
-      player: String(payload.player || 'Waiting for next player').slice(0, 150),
-      details: String(payload.details || '').slice(0, 250), teamShort: String(payload.teamShort || '').slice(0, 20),
-      amount: String(payload.amount || '').slice(0, 30), updated_at: new Date() };
-    await C('broadcast_state').updateOne({ _id: 'current' }, { $set: safe }, { upsert: true });
-    io.emit('broadcast:state', safe);
+    const p = req.body || {};
+
+    const state = {
+      status: String(p.status || 'AUCTION LIVE').slice(0, 24),
+      player: String(p.player || 'Waiting for next player').slice(0, 150),
+      details: String(p.details || '').slice(0, 250),
+      teamShort: String(p.teamShort || '').slice(0, 20),
+      amount: String(p.amount || '').slice(0, 30),
+      teamLogo: p.teamShort === 'BR' ? '/assets/br-bulls-logo.png' : ''
+    };
+
+    await (await col('broadcast_state')).updateOne(
+      { _id: 'current' },
+      { $set: { state, updated_at: now() } },
+      { upsert: true }
+    );
+
+    io.emit('broadcast:state', state);
     res.json({ ok: true });
-  } catch (error) { handleError(res, error, 500); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-const PORT = process.env.PORT || 3000;
-if (require.main === module) {
-  connectDB().then(() => {
-    server.listen(PORT, () => console.log(`SNK Friends Cricket Mega Auction running on port ${PORT} · MongoDB database: ${DB_NAME}`));
-  }).catch(error => {
-    console.error('MongoDB startup failed:', error.message);
-    process.exitCode = 1;
+// HEALTH CHECK
+
+app.get('/api/health', async (_req, res) => {
+  try {
+    await dbPromise;
+
+    await (await col('app_meta')).updateOne(
+      { _id: 'health' },
+      { $set: { checked_at: now() } },
+      { upsert: true }
+    );
+
+    res.json({
+      ok: true,
+      database: dbName,
+      provider: 'mongodb'
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+// TEAMS
+
+app.get('/api/teams', async (_req, res) => {
+  try {
+    const teams = await (await col('teams'))
+      .find({})
+      .sort({ name: 1 })
+      .toArray();
+
+    const out = [];
+
+    for (const t of teams) {
+      const s = await getTeamState(t.id);
+
+      out.push({
+        ...t,
+        squad_size: s.total,
+        indian_count: s.counts.Indian,
+        overseas_count: s.counts.Overseas,
+        associate_count: s.counts.Associate,
+        effective_overseas: s.effOverseas,
+        spent: money(
+          Number(t.initial_purse || 0) -
+          Number(t.remaining_purse || 0)
+        )
+      });
+    }
+
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/teams', async (req, res) => {
+  try {
+    const { name, short_name, logo_url } = req.body;
+
+    if (!name) throw new Error('Team name required');
+
+    const id = await nextId('teams');
+
+    const doc = {
+      id,
+      name: String(name).trim(),
+      short_name: short_name || '',
+      logo_url: logo_url || '',
+      initial_purse: 90,
+      remaining_purse: 90,
+      indian_rtm: 3,
+      overseas_rtm: 3,
+      created_at: now()
+    };
+
+    await (await col('teams')).insertOne(doc);
+
+    res.json({ id, name: doc.name });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// PLAYERS
+
+app.get('/api/players', async (req, res) => {
+  try {
+    const q = {};
+    const { status, search, category, role } = req.query;
+
+    if (status) q.status = status;
+    if (category) q.category = category;
+    if (role) q.role = role;
+
+    if (search) {
+      q.name = {
+        $regex: String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        $options: 'i'
+      };
+    }
+
+    const rows = await (await col('players'))
+      .find(q)
+      .sort({ name: 1 })
+      .toArray();
+
+    const teams = await (await col('teams')).find({}).toArray();
+    const tm = new Map(teams.map(t => [t.id, t.name]));
+
+    res.json(rows.map(p => ({
+      ...p,
+      current_team: tm.get(p.current_team_id) || null
+    })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/players', async (req, res) => {
+  try {
+    const p = req.body;
+
+    if (!p.name || !['Indian', 'Overseas', 'Associate'].includes(p.category)) {
+      throw new Error('Player name and valid category required');
+    }
+
+    const normalized = String(p.name).trim().toLowerCase();
+
+    const existing = await (await col('players'))
+      .findOne({ name_normalized: normalized });
+
+    if (existing) throw new Error('Player already exists');
+
+    const id = await nextId('players');
+
+    await (await col('players')).insertOne({
+      id,
+      name: String(p.name).trim(),
+      name_normalized: normalized,
+      country: p.country || '',
+      category: p.category,
+      role: p.role || 'Batter',
+      previous_price: Number(p.previous_price || 0),
+      previous_team: p.previous_team || '',
+      base_price: Number(p.base_price || 0.5),
+      photo_url: p.photo_url || null,
+      status: 'AVAILABLE',
+      current_team_id: null,
+      sold_price: null,
+      acquisition_type: null,
+      created_at: now()
+    });
+
+    res.json({ id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// IMPORT TEAM CODES
+
+async function importTeamCodes(wb) {
+  const sh = wb.Sheets['Team Code Reference'];
+
+  if (!sh) {
+    return { teamsImported: 0, teamsSkipped: 0 };
+  }
+
+  const rows = XLSX.utils.sheet_to_json(sh, { defval: '' });
+
+  const purses = {
+    KCG: 90,
+    ARC: 90,
+    DCS: 90,
+    VTK: 90,
+    SS: 90,
+    FCK: 90,
+    TG: 87,
+    BBC: 87,
+    AKS: 67,
+    KD2: 67,
+    BR: 67,
+    CC: 53,
+    RH: 47,
+    '7SV': 12
+  };
+
+  const teams = await col('teams');
+
+  const existing = new Set(
+    (await teams.find({}, { projection: { short_name: 1 } }).toArray())
+      .map(t => String(t.short_name || '').toUpperCase())
+  );
+
+  const pending = [];
+  let teamsSkipped = 0;
+
+  for (const row of rows) {
+    const rawCode = String(row['Previous Team Code'] || '').trim();
+
+    if (!rawCode) continue;
+
+    const code = rawCode.replace('²', '2').toUpperCase();
+
+    if (existing.has(code)) {
+      teamsSkipped++;
+      continue;
+    }
+
+    existing.add(code);
+
+    pending.push({
+      name: rawCode,
+      short_name: code,
+      logo_url: `/assets/team-${code.toLowerCase()}.webp`,
+      initial_purse: Number(purses[code] ?? 90),
+      remaining_purse: Number(purses[code] ?? 90),
+      indian_rtm: 3,
+      overseas_rtm: 3,
+      created_at: now()
+    });
+  }
+
+  if (!pending.length) {
+    return { teamsImported: 0, teamsSkipped };
+  }
+
+  const counters = await col('counters');
+
+  const counter = await counters.findOneAndUpdate(
+    { _id: 'teams' },
+    { $inc: { seq: pending.length } },
+    { upsert: true, returnDocument: 'after' }
+  );
+
+  const lastId = Number(counter.seq);
+  const firstId = lastId - pending.length + 1;
+
+  pending.forEach((team, i) => {
+    team.id = firstId + i;
   });
+
+  await teams.insertMany(pending, { ordered: true });
+
+  return {
+    teamsImported: pending.length,
+    teamsSkipped
+  };
 }
 
-module.exports = { app, server, io, connectDB, inTransaction };
+
+// EXCEL IMPORT
+
+app.post('/api/import', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) throw new Error('Choose an Excel file');
+
+    const ext = path.extname(req.file.originalname || '').toLowerCase();
+
+    if (!['.xlsx', '.xls'].includes(ext)) {
+      throw new Error('Only .xlsx and .xls files are supported');
+    }
+
+    const wb = XLSX.read(req.file.buffer, {
+      type: 'buffer',
+      cellDates: true
+    });
+
+    const sheet =
+      wb.Sheets['Player Import'] ||
+      wb.Sheets[wb.SheetNames[0]];
+
+    if (!sheet) throw new Error('Player Import sheet was not found');
+
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    if (!rows.length) {
+      throw new Error('The selected Excel sheet has no player rows');
+    }
+
+    const players = await col('players');
+
+    // Load existing names once.
+    const existingNames = new Set(
+      (await players.find(
+        {},
+        { projection: { name_normalized: 1, name: 1 } }
+      ).toArray())
+        .map(p =>
+          String(p.name_normalized || p.name || '')
+            .trim()
+            .toLocaleLowerCase('en')
+        )
+        .filter(Boolean)
+    );
+
+    const seenInFile = new Set();
+    const docs = [];
+
+    let skippedExisting = 0;
+    let skippedDuplicateInFile = 0;
+    let skippedInvalid = 0;
+
+    const validRoles = new Set([
+      'Batter',
+      'Batting All-Rounder',
+      'Bowling All-Rounder',
+      'Bowler',
+      'Wicket Keeper'
+    ]);
+
+    const toNumber = value => {
+      if (value === undefined || value === null || value === '') {
+        return 0;
+      }
+
+      const parsed = Number(
+        String(value)
+          .replace(/[₹,]/g, '')
+          .replace(/\s*Cr\s*/i, '')
+          .replace(/C$/i, '')
+          .trim()
+      );
+
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    for (const row of rows) {
+      const n = {};
+
+      Object.keys(row).forEach(k => {
+        n[k.toLowerCase().trim().replace(/[^a-z0-9]/g, '')] = row[k];
+      });
+
+      const name = String(
+        n.playername || n.name || n.player || ''
+      ).trim();
+
+      const category = String(
+        n.category || n.countrycategory || n.type || ''
+      ).trim();
+
+      if (
+        !name ||
+        !['Indian', 'Overseas', 'Associate'].includes(category)
+      ) {
+        skippedInvalid++;
+        continue;
+      }
+
+      const normalized = name.toLocaleLowerCase('en');
+
+      if (seenInFile.has(normalized)) {
+        skippedDuplicateInFile++;
+        continue;
+      }
+
+      seenInFile.add(normalized);
+
+      if (existingNames.has(normalized)) {
+        skippedExisting++;
+        continue;
+      }
+
+      const roleRaw = String(
+        n.role || n.playerrole || 'Batter'
+      ).trim();
+
+      const base = toNumber(n.baseprice);
+
+      docs.push({
+        name,
+        name_normalized: normalized,
+        country: String(n.country || '').trim(),
+        category,
+        role: validRoles.has(roleRaw) ? roleRaw : 'Batter',
+        previous_price: toNumber(
+          n.previousprice || n.previoussoldprice || n.soldprice
+        ),
+        previous_team: String(
+          n.previousteam || n.team || ''
+        ).trim(),
+        base_price: base > 0 ? base : 0.5,
+        photo_url: String(
+          n.photourl || n.photo || n.imageurl || ''
+        ).trim() || null,
+        status: 'AVAILABLE',
+        current_team_id: null,
+        sold_price: null,
+        acquisition_type: null,
+        created_at: now()
+      });
+    }
+
+    // Allocate IDs in one operation and insert in batches.
+    if (docs.length) {
+      const counters = await col('counters');
+
+      const counter = await counters.findOneAndUpdate(
+        { _id: 'players' },
+        { $inc: { seq: docs.length } },
+        { upsert: true, returnDocument: 'after' }
+      );
+
+      const lastId = Number(counter.seq);
+      const firstId = lastId - docs.length + 1;
+
+      docs.forEach((doc, i) => {
+        doc.id = firstId + i;
+      });
+
+      for (let i = 0; i < docs.length; i += 250) {
+        await players.insertMany(
+          docs.slice(i, i + 250),
+          { ordered: true }
+        );
+      }
+    }
+
+    const teamImport = await importTeamCodes(wb);
+
+    const result = {
+      ok: true,
+      imported: docs.length,
+      skipped: skippedExisting + skippedDuplicateInFile + skippedInvalid,
+      skippedExisting,
+      skippedDuplicateInFile,
+      skippedInvalid,
+      totalRows: rows.length,
+      teamsImported: teamImport.teamsImported,
+      teamsSkipped: teamImport.teamsSkipped,
+      message: `Import completed: ${docs.length} new players added.`
+    };
+
+    io.emit('auction:update');
+    res.json(result);
+
+  } catch (e) {
+    console.error('Excel import failed:', e);
+
+    res.status(400).json({
+      ok: false,
+      error: e.message || 'Excel import failed'
+    });
+  }
+});
+
+// RETENTION
+
+app.post('/api/retention', async (req, res) => {
+  try {
+    const result = await withTransaction(async s => {
+      const { player_id, team_id, amount } = req.body;
+
+      const p = await (await col('players')).findOne(
+        { id: Number(player_id), status: 'AVAILABLE' },
+        { session: s }
+      );
+
+      if (!p) throw new Error('Player is not available for retention');
+
+      const t = await (await col('teams')).findOne(
+        { id: Number(team_id) },
+        { session: s }
+      );
+
+      if (!t) throw new Error('Team not found');
+
+      if (
+        !p.previous_team ||
+        p.previous_team.trim().toLowerCase() !== t.name.trim().toLowerCase()
+      ) {
+        throw new Error(
+          'A player can only be retained by their previous-season team'
+        );
+      }
+
+      const key = p.category === 'Indian'
+        ? 'indian_rtm'
+        : 'overseas_rtm';
+
+      if (Number(t[key] || 0) <= 0) {
+        throw new Error('No matching RTM entitlement remains for this category');
+      }
+
+      await addPlayerToTeam(team_id, p, amount, 'Retention', s);
+
+      await (await col('teams')).updateOne(
+        { id: Number(team_id) },
+        { $inc: { [key]: -1 } },
+        { session: s }
+      );
+
+      await addEvent({
+        player_id: p.id,
+        team_id: Number(team_id),
+        event_type: 'RETENTION',
+        amount: money(amount)
+      }, s);
+
+      return true;
+    });
+
+    io.emit('auction:update');
+    res.json({ ok: result });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// RELEASE
+
+app.post('/api/release', async (req, res) => {
+  try {
+    const result = await withTransaction(async s => {
+      const { player_id } = req.body;
+
+      const p = await (await col('players')).findOne(
+        { id: Number(player_id), status: 'RETAINED' },
+        { session: s }
+      );
+
+      if (!p) throw new Error('Retained player not found');
+
+      const teamId = p.current_team_id;
+      const amount = money(p.sold_price || 0);
+
+      const key = p.category === 'Indian'
+        ? 'indian_rtm'
+        : 'overseas_rtm';
+
+      await (await col('teams')).updateOne(
+        { id: teamId },
+        { $inc: { remaining_purse: amount, [key]: 1 } },
+        { session: s }
+      );
+
+      await (await col('team_squads')).deleteOne(
+        { player_id: p.id },
+        { session: s }
+      );
+
+      await (await col('players')).updateOne(
+        { id: p.id },
+        {
+          $set: {
+            status: 'AVAILABLE',
+            current_team_id: null,
+            sold_price: null,
+            acquisition_type: null
+          }
+        },
+        { session: s }
+      );
+
+      await addEvent({
+        player_id: p.id,
+        team_id: teamId,
+        event_type: 'RELEASE',
+        amount,
+        details: {
+          refunded_purse: true,
+          returned_rtm: true
+        }
+      }, s);
+
+      return amount;
+    });
+
+    io.emit('auction:update');
+    res.json({ ok: true, refunded: result, rtmReturned: true });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// TRADE
+// Trade amount is deducted from buyer purse only.
+// Seller purse is not credited.
+
+app.post('/api/trade', async (req, res) => {
+  try {
+    const out = await withTransaction(async s => {
+      const {
+        player_id,
+        from_team_id,
+        to_team_id,
+        amount
+      } = req.body;
+
+      const pid = Number(player_id);
+      const sellerId = Number(from_team_id);
+      const buyerId = Number(to_team_id);
+
+      if (sellerId === buyerId) {
+        throw new Error('Choose a different buying team');
+      }
+
+      const p = await (await col('players')).findOne(
+        { id: pid, current_team_id: sellerId },
+        { session: s }
+      );
+
+      if (!p) throw new Error('Player does not belong to selling team');
+
+      const seller = await (await col('teams')).findOne(
+        { id: sellerId },
+        { session: s }
+      );
+
+      const buyer = await (await col('teams')).findOne(
+        { id: buyerId },
+        { session: s }
+      );
+
+      if (!seller || !buyer) {
+        throw new Error('Seller or buyer team not found');
+      }
+
+      const amt = money(Number(amount));
+
+      if (!Number.isFinite(amt) || amt <= 0) {
+        throw new Error('Enter a valid trade amount greater than zero');
+      }
+
+      if (Number(buyer.remaining_purse) < amt) {
+        throw new Error('Buyer team does not have enough purse');
+      }
+
+      await validateAddition(buyerId, p, amt, s);
+
+      await (await col('team_squads')).deleteOne(
+        { player_id: pid },
+        { session: s }
+      );
+
+      await (await col('teams')).updateOne(
+        { id: buyerId },
+        { $inc: { remaining_purse: -amt } },
+        { session: s }
+      );
+
+      await (await col('team_squads')).insertOne({
+        id: await nextId('team_squads'),
+        team_id: buyerId,
+        player_id: pid,
+        amount: amt,
+        acquisition_type: 'Trade',
+        created_at: now()
+      }, { session: s });
+
+      await (await col('players')).updateOne(
+        { id: pid },
+        {
+          $set: {
+            current_team_id: buyerId,
+            sold_price: amt,
+            acquisition_type: 'Trade'
+          }
+        },
+        { session: s }
+      );
+
+      await (await col('trades')).insertOne({
+        id: await nextId('trades'),
+        player_id: pid,
+        from_team_id: sellerId,
+        to_team_id: buyerId,
+        amount: amt,
+        created_at: now()
+      }, { session: s });
+
+      await addEvent({
+        player_id: pid,
+        team_id: buyerId,
+        event_type: 'TRADE',
+        amount: amt,
+        details: {
+          from_team_id: sellerId,
+          buyer_only_deduction: true
+        }
+      }, s);
+
+      return {
+        amount: amt,
+        buyer_remaining_purse: Number(buyer.remaining_purse) - amt,
+        seller_remaining_purse: Number(seller.remaining_purse)
+      };
+    });
+
+    io.emit('auction:update');
+
+    res.json({
+      ok: true,
+      buyer_purse_deducted: out.amount,
+      seller_purse_credited: 0,
+      ...out
+    });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// BID
+
+app.post('/api/bid', async (req, res) => {
+  try {
+    const { player_id, team_id, amount } = req.body;
+
+    const p = await (await col('players')).findOne({
+      id: Number(player_id),
+      status: 'AVAILABLE'
+    });
+
+    if (!p) throw new Error('Player is not available');
+
+    await validateAddition(team_id, p, amount);
+
+    const id = await nextId('auction_bids');
+
+    await (await col('auction_bids')).insertOne({
+      id,
+      player_id: Number(player_id),
+      team_id: Number(team_id),
+      amount: money(amount),
+      created_at: now()
+    });
+
+    const team = await (await col('teams')).findOne({
+      id: Number(team_id)
+    });
+
+    io.emit('auction:bid', {
+      player_id: Number(player_id),
+      team_id: Number(team_id),
+      team: team?.name,
+      amount: money(amount)
+    });
+
+    res.json({ ok: true });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// SOLD
+
+app.post('/api/sold', async (req, res) => {
+  try {
+    await withTransaction(async s => {
+      const { player_id, team_id, amount } = req.body;
+
+      const p = await (await col('players')).findOne(
+        { id: Number(player_id), status: 'AVAILABLE' },
+        { session: s }
+      );
+
+      if (!p) throw new Error('Player is not available');
+
+      await addPlayerToTeam(team_id, p, amount, 'Auction', s);
+
+      await addEvent({
+        player_id: p.id,
+        team_id: Number(team_id),
+        event_type: 'SOLD',
+        amount: money(amount)
+      }, s);
+    });
+
+    io.emit('auction:update');
+    res.json({ ok: true });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// UNSOLD
+
+app.post('/api/unsold', async (req, res) => {
+  try {
+    const { player_id } = req.body;
+
+    const r = await (await col('players')).updateOne(
+      {
+        id: Number(player_id),
+        status: 'AVAILABLE'
+      },
+      {
+        $set: {
+          status: 'UNSOLD',
+          current_team_id: null
+        }
+      }
+    );
+
+    if (!r.modifiedCount) {
+      throw new Error('Player is not available');
+    }
+
+    await addEvent({
+      player_id: Number(player_id),
+      event_type: 'UNSOLD'
+    });
+
+    io.emit('auction:update');
+    res.json({ ok: true });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// REAUCTION
+
+app.post('/api/reauction', async (req, res) => {
+  try {
+    const r = await (await col('players')).updateOne(
+      {
+        id: Number(req.body.player_id),
+        status: 'UNSOLD'
+      },
+      {
+        $set: { status: 'AVAILABLE' }
+      }
+    );
+
+    if (!r.modifiedCount) {
+      throw new Error('Player is not unsold');
+    }
+
+    io.emit('auction:update');
+    res.json({ ok: true });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// SOLD PLAYERS
+
+app.get('/api/sold', async (_req, res) => {
+  try {
+    const rows = await (await col('players'))
+      .find({ status: 'SOLD' })
+      .sort({ name: 1 })
+      .toArray();
+
+    const teams = await (await col('teams')).find({}).toArray();
+    const tm = new Map(teams.map(t => [t.id, t.name]));
+
+    res.json(rows.map(p => ({
+      ...p,
+      current_team: tm.get(p.current_team_id) || null
+    })));
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// BRING BACK SOLD PLAYER
+
+app.post('/api/sold/bring-back', async (req, res) => {
+  try {
+    const refund = await withTransaction(async s => {
+      const pid = Number(req.body.player_id);
+
+      const p = await (await col('players')).findOne(
+        { id: pid, status: 'SOLD' },
+        { session: s }
+      );
+
+      if (!p) throw new Error('Sold player not found');
+
+      const amount = money(p.sold_price || 0);
+      const teamId = p.current_team_id;
+
+      if (teamId) {
+        const inc = { remaining_purse: amount };
+
+        if (p.acquisition_type === 'RTM') {
+          inc[p.category === 'Indian' ? 'indian_rtm' : 'overseas_rtm'] = 1;
+        }
+
+        await (await col('teams')).updateOne(
+          { id: teamId },
+          { $inc: inc },
+          { session: s }
+        );
+
+        await (await col('team_squads')).deleteOne(
+          { player_id: pid },
+          { session: s }
+        );
+      }
+
+      await (await col('players')).updateOne(
+        { id: pid },
+        {
+          $set: {
+            status: 'AVAILABLE',
+            current_team_id: null,
+            sold_price: null,
+            acquisition_type: null
+          }
+        },
+        { session: s }
+      );
+
+      await addEvent({
+        player_id: pid,
+        team_id: teamId,
+        event_type: 'SALE_REVERSED',
+        amount,
+        details: { purse_refunded: true }
+      }, s);
+
+      return { amount, teamId };
+    });
+
+    io.emit('auction:update');
+
+    res.json({
+      ok: true,
+      refunded: refund.amount,
+      team_id: refund.teamId
+    });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// RTM
+
+app.post('/api/rtm', async (req, res) => {
+  try {
+    await withTransaction(async s => {
+      const { player_id, team_id, amount } = req.body;
+
+      const p = await (await col('players')).findOne(
+        { id: Number(player_id), status: 'AVAILABLE' },
+        { session: s }
+      );
+
+      if (!p) throw new Error('Player is not available');
+
+      if (!p.previous_team) {
+        throw new Error(
+          'Previous team is not recorded; RTM eligibility cannot be verified'
+        );
+      }
+
+      const team = await (await col('teams')).findOne(
+        { id: Number(team_id), name: p.previous_team },
+        { session: s }
+      );
+
+      if (!team) {
+        throw new Error("Only the player's previous team can use RTM");
+      }
+
+      const key = p.category === 'Indian'
+        ? 'indian_rtm'
+        : 'overseas_rtm';
+
+      if (Number(team[key] || 0) <= 0) {
+        throw new Error('No eligible RTM card remains');
+      }
+
+      await addPlayerToTeam(team_id, p, amount, 'RTM', s);
+
+      await (await col('teams')).updateOne(
+        { id: Number(team_id) },
+        { $inc: { [key]: -1 } },
+        { session: s }
+      );
+
+      await addEvent({
+        player_id: p.id,
+        team_id: Number(team_id),
+        event_type: 'RTM',
+        amount: money(amount)
+      }, s);
+    });
+
+    io.emit('auction:update');
+    res.json({ ok: true });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// PLAYER DETAILS
+
+app.get('/api/player/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    const player = await (await col('players')).findOne({ id });
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+
+    const team = player.current_team_id
+      ? await (await col('teams')).findOne({
+          id: player.current_team_id
+        })
+      : null;
+
+    const bids = await (await col('auction_bids'))
+      .find({ player_id: id })
+      .sort({ amount: -1, id: -1 })
+      .limit(10)
+      .toArray();
+
+    const bidTeams = await (await col('teams')).find({
+      id: { $in: bids.map(b => b.team_id) }
+    }).toArray();
+
+    const btm = new Map(bidTeams.map(t => [t.id, t]));
+
+    const events = await (await col('auction_events'))
+      .find({ player_id: id })
+      .sort({ id: -1 })
+      .limit(10)
+      .toArray();
+
+    res.json({
+      player: {
+        ...player,
+        current_team: team?.name || null,
+        current_team_short: team?.short_name || null
+      },
+      bids: bids.map(b => ({
+        ...b,
+        team_name: btm.get(b.team_id)?.name,
+        short_name: btm.get(b.team_id)?.short_name
+      })),
+      events
+    });
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// NOMINATION QUEUE
+
+app.get('/api/nomination-queue', async (_req, res) => {
+  try {
+    const rows = await (await col('players'))
+      .find(
+        { status: 'AVAILABLE' },
+        {
+          projection: {
+            id: 1,
+            name: 1,
+            category: 1,
+            role: 1,
+            base_price: 1,
+            photo_url: 1
+          }
+        }
+      )
+      .sort({ category: 1, role: 1, name: 1 })
+      .toArray();
+
+    res.json(rows);
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// TEAM SQUAD
+
+app.get('/api/squad/:teamId', async (req, res) => {
+  try {
+    const squad = await (await col('team_squads'))
+      .find({ team_id: Number(req.params.teamId) })
+      .sort({ id: 1 })
+      .toArray();
+
+    const ids = squad.map(x => x.player_id);
+
+    const players = ids.length
+      ? await (await col('players')).find({
+          id: { $in: ids }
+        }).toArray()
+      : [];
+
+    const sm = new Map(squad.map(x => [x.player_id, x]));
+
+    res.json(
+      players.map(p => ({
+        ...p,
+        amount: sm.get(p.id)?.amount,
+        acquisition_type: sm.get(p.id)?.acquisition_type
+      })).sort(
+        (a, b) =>
+          String(a.category).localeCompare(String(b.category)) ||
+          a.name.localeCompare(b.name)
+      )
+    );
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// STATS
+
+app.get('/api/stats', async (_req, res) => {
+  try {
+    const p = await (await col('players')).find({}).toArray();
+    const squads = await (await col('team_squads')).find({}).toArray();
+
+    res.json({
+      total: p.length,
+      available: p.filter(x => x.status === 'AVAILABLE').length,
+      sold: p.filter(x => x.status === 'SOLD').length,
+      unsold: p.filter(x => x.status === 'UNSOLD').length,
+      retained: p.filter(x => x.status === 'RETAINED').length,
+      total_spend: money(
+        squads.reduce((a, x) => a + Number(x.amount || 0), 0)
+      )
+    });
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// EXCEL REPORT
+
+app.get('/api/reports.xlsx', async (_req, res) => {
+  try {
+    const teams = await (await col('teams'))
+      .find({})
+      .sort({ name: 1 })
+      .toArray();
+
+    const players = await (await col('players')).find({}).toArray();
+    const trades = await (await col('trades'))
+      .find({})
+      .sort({ id: -1 })
+      .toArray();
+
+    const tm = new Map(teams.map(t => [t.id, t.name]));
+
+    const wb = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(teams),
+      'Teams & Purse'
+    );
+
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(
+        players.map(p => ({
+          ...p,
+          current_team: tm.get(p.current_team_id) || ''
+        })).map(({ _id, ...x }) => x)
+      ),
+      'Player Register'
+    );
+
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(
+        trades.map(t => ({
+          player: players.find(p => p.id === t.player_id)?.name || '',
+          seller: tm.get(t.from_team_id) || '',
+          buyer: tm.get(t.to_team_id) || '',
+          amount: t.amount,
+          created_at: t.created_at
+        }))
+      ),
+      'Trade History'
+    );
+
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="SNK_Friends_Auction_Report.xlsx"'
+    );
+
+    res.type(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ).send(
+      XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    );
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// BACKUP
+
+app.get('/api/backup', async (_req, res) => {
+  try {
+    const tables = {};
+
+    for (const name of [
+      'teams',
+      'players',
+      'team_squads',
+      'auction_bids',
+      'trades',
+      'auction_events'
+    ]) {
+      tables[name] = (await (await col(name))
+        .find({})
+        .toArray())
+        .map(({ _id, ...x }) => x);
+    }
+
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="SNK_Friends_Auction_Backup.json"'
+    );
+
+    res.json({
+      app: 'SNK Friends Cricket Mega Auction',
+      version: 2,
+      created_at: now().toISOString(),
+      tables
+    });
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// RESET ALL DATA
+// Use only when intentionally resetting the auction.
+
+app.post('/api/reset-all-data', async (req, res) => {
+  if (req.body?.confirm !== 'DELETE ALL DATA') {
+    return res.status(400).json({
+      error: 'Reset confirmation phrase is required'
+    });
+  }
+
+  try {
+    await withTransaction(async s => {
+      for (const n of [
+        'auction_bids',
+        'trades',
+        'auction_events',
+        'team_squads',
+        'players',
+        'teams'
+      ]) {
+        await (await col(n)).deleteMany({}, { session: s });
+      }
+    });
+
+    io.emit('auction:update');
+
+    res.json({
+      ok: true,
+      message: 'All auction data has been removed.'
+    });
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// RESTORE BACKUP
+
+app.post('/api/restore', upload.single('file'), async (req, res) => {
+  if (req.body?.confirm !== 'RESTORE BACKUP') {
+    return res.status(400).json({
+      error: 'Type RESTORE BACKUP to confirm'
+    });
+  }
+
+  try {
+    if (!req.file) throw new Error('Choose a backup JSON file');
+
+    const backup = JSON.parse(req.file.buffer.toString('utf8'));
+
+    const allowed = [
+      'teams',
+      'players',
+      'team_squads',
+      'auction_bids',
+      'trades',
+      'auction_events'
+    ];
+
+    if (
+      !backup.tables ||
+      allowed.some(t => !Array.isArray(backup.tables[t]))
+    ) {
+      throw new Error('Invalid backup format');
+    }
+
+    await withTransaction(async s => {
+      for (const n of allowed) {
+        const c = await col(n);
+
+        await c.deleteMany({}, { session: s });
+
+        if (backup.tables[n].length) {
+          await c.insertMany(
+            backup.tables[n].map(x => ({
+              ...x,
+              created_at: x.created_at
+                ? new Date(x.created_at)
+                : now()
+            })),
+            { session: s }
+          );
+        }
+      }
+    });
+
+    await ensureIndexes();
+
+    io.emit('auction:update');
+    res.json({ ok: true, message: 'Backup restored' });
+
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+
+// LATEST TEAM
+
+app.get('/api/latest-team', async (_req, res) => {
+  try {
+    const e = await (await col('auction_events'))
+      .find({
+        team_id: { $ne: null },
+        event_type: {
+          $in: ['SOLD', 'RTM', 'RETENTION', 'TRADE']
+        }
+      })
+      .sort({ id: -1 })
+      .limit(1)
+      .next();
+
+    const t = e
+      ? await (await col('teams')).findOne({ id: e.team_id })
+      : null;
+
+    res.json(t ? { id: t.id, name: t.name } : null);
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// AUCTION HISTORY
+
+app.get('/api/history', async (_req, res) => {
+  try {
+    const events = await (await col('auction_events'))
+      .find({})
+      .sort({ id: -1 })
+      .limit(200)
+      .toArray();
+
+    const pids = [
+      ...new Set(events.map(e => e.player_id).filter(Boolean))
+    ];
+
+    const tids = [
+      ...new Set(
+        events.flatMap(e => [
+          e.team_id,
+          e.details?.from_team_id
+        ]).filter(Boolean)
+      )
+    ];
+
+    const ps = await (await col('players'))
+      .find({ id: { $in: pids } })
+      .toArray();
+
+    const ts = await (await col('teams'))
+      .find({ id: { $in: tids } })
+      .toArray();
+
+    const pm = new Map(ps.map(x => [x.id, x.name]));
+    const tm = new Map(ts.map(x => [x.id, x.name]));
+
+    res.json(
+      events.map(e => ({
+        ...e,
+        player_name: pm.get(e.player_id) || null,
+        team_name: tm.get(e.team_id) || null,
+        seller_team_name: tm.get(e.details?.from_team_id) || null
+      }))
+    );
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// FRONTEND FALLBACK
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+
+// STARTUP
+
+const ready = Promise.all([
+  clientPromise,
+  ensureIndexes()
+]).then(seedTeamsIfEmpty);
+
+const PORT = process.env.PORT || 3000;
+
+if (require.main === module) {
+  ready
+    .then(() => {
+      server.listen(PORT, () => {
+        console.log(
+          `SNK Cricket Mega Auction running at http://localhost:${PORT} (MongoDB: ${dbName})`
+        );
+      });
+    })
+    .catch(err => {
+      console.error('Startup failed:', err);
+      process.exit(1);
+    });
+}
+
+module.exports = {
+  app,
+  server,
+  io,
+  ready
+};
