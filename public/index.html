@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cricket Mega Auction</title><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app-shell">
+<aside class="sidebar">
+  <div class="brand"><div class="brand-mark">🏏</div><div><b>MEGA AUCTION</b><small>FRANCHISE CONTROL</small></div></div>
+  <nav>
+    <button class="nav active" data-page="dashboard">▦ Dashboard</button>
+    <button class="nav" data-page="auction">⚡ Live Auction</button>
+    <button class="nav" data-page="players">♟ Players</button>
+    <button class="nav" data-page="teams">🛡 Teams & Squads</button>
+    <button class="nav" data-page="retention">⇄ Retention & Release</button>
+    <button class="nav" data-page="unsold">↻ Unsold Players</button>
+    <button class="nav" data-page="sold">✓ Sold Players</button>
+    <button class="nav" data-page="trades">⇄ Player Trade</button>
+    <button class="nav" data-page="import">⇧ Excel Import</button>
+    <button class="nav" data-page="history">◷ Auction History</button>
+    <button class="nav" data-page="squad">🏆 Squad Builder</button>
+    <button class="nav" data-page="analytics">📊 Auction Statistics</button>
+    <button class="nav" data-page="broadcast">📺 Broadcast Mode</button>
+    <button class="nav" data-page="tools">⚙ Auction Tools</button>
+    <button class="nav" data-page="nomination">🎯 Nomination Center</button>
+    <button class="nav" data-page="analyzer">🧩 Playing XI Analyzer</button>
+    <button class="nav" data-page="tournament">🏆 Tournament Center</button>
+  </nav>
+  <div class="sidebar-foot"><span class="live-dot"></span> AUCTION CONTROL ONLINE</div>
+</aside>
+<main class="main">
+<header class="topbar"><div><div class="eyebrow">CRICKET FRANCHISE MANAGEMENT</div><h1 id="pageTitle">Dashboard</h1></div><div class="top-actions"><span class="pill">● LIVE SYSTEM</span><button class="btn btn-danger" onclick="resetAllData()">Reset All Data</button><button class="btn btn-gold" onclick="openTeamModal()">+ Add Team</button></div></header>
+<section id="page-dashboard" class="page active">
+  <div class="organiser-hero">
+    <div class="organiser-brand"><img src="/assets/snk-friends-logo.jpg" alt="SNK Friends organisers logo"><div><span class="eyebrow gold-text">PRESENTED BY</span><h2>SNK FRIENDS</h2><p>Cricket Auction Management</p></div></div>
+    <div class="admin-card"><img src="/assets/snk-admin-profile.jpg" alt="SNK Friends admin"><div><span class="eyebrow">AUCTION ADMIN</span><strong>SNK Friends Admin</strong><small>Organising Team</small></div></div>
+    <div class="organiser-copy"><div class="eyebrow gold-text">THE BIGGEST NIGHT IN CRICKET</div><h2>Build your winning<br><em>championship squad.</em></h2><p>One purse. Twenty slots. Every decision counts.</p></div>
+  </div>
+  <div class="stats-grid">
+    <div class="stat"><span>REGISTERED PLAYERS</span><b id="statTotal">0</b><small>In player database</small></div>
+    <div class="stat"><span>AVAILABLE</span><b id="statAvailable">0</b><small>Ready for auction</small></div>
+    <div class="stat"><span>SOLD PLAYERS</span><b id="statSold">0</b><small>Including auction sales</small></div>
+    <div class="stat"><span>UNSOLD PLAYERS</span><b id="statUnsold">0</b><small>Can return to auction</small></div>
+  </div>
+  <div class="section-head"><div><div class="eyebrow">FRANCHISE OVERVIEW</div><h3>Team purse & squad status</h3></div><button class="btn btn-outline" onclick="loadTeams()">↻ Refresh</button></div>
+  <div id="teamOverview" class="team-grid"></div>
+</section>
+<section id="page-auction" class="page">
+  <div class="auction-layout">
+    <div class="player-stage">
+      <div class="stage-top"><span class="live-pill"><i></i> LIVE AUCTION</span><span id="auctionIndex" class="muted">PLAYER LOT</span></div>
+      <div class="auctioneer-host"><div class="auctioneer-label"><span class="live-dot"></span> AUCTION CONDUCTED BY</div><img class="auctioneer-photo" src="/assets/snk-auctioneer.jpg" alt="Auctioneer"><span class="auctioneer-name">SNK FRIENDS AUCTIONEER</span></div>
+      <div class="player-avatar" id="playerAvatar"><span>🏏</span></div>
+      <div class="eyebrow gold-text">NOW ON THE BLOCK</div><h2 id="auctionPlayerName">Select an available player</h2>
+      <div class="player-tags"><span id="auctionCategory">CATEGORY</span><span id="auctionRole">ROLE</span></div>
+      <div class="player-meta"><div><small>PREVIOUS TEAM</small><b id="auctionPreviousTeam">—</b></div><div><small>PREVIOUS PRICE</small><b id="auctionPreviousPrice">—</b></div><div><small>BASE PRICE</small><b id="auctionBasePrice">—</b></div></div>
+      <div class="bid-box"><small>CURRENT BID / FINAL SALE PRICE (₹ Cr)</small><div class="bid-line"><strong id="currentBid">0.50</strong><span id="currentBidTeam">No bids yet</span></div>
+        <div class="bid-controls"><input id="bidAmount" type="number" step="0.01" min="0.01" placeholder="Enter amount in Cr"><select id="bidTeam"><option value="">Select team</option></select></div>
+        <div class="increments bid-movement"><span>MANUAL BID INCREASE</span><button onclick="incrementBid(.25)">+₹25 LAKH</button><button onclick="incrementBid(.50)">+₹50 LAKH</button><button onclick="incrementBid(1)">+₹1 CRORE</button><button onclick="incrementBid(2)">+₹2 CRORE</button><button onclick="incrementBid(5)">+₹5 CRORE</button></div>
+      </div>
+      <div class="bid-clock-row"><span>LIVE BID COUNTDOWN</span><strong id="bidCountdown">00:30</strong><button class="btn btn-outline" onclick="resetBidCountdown()">Reset</button></div>
+      <div class="auction-actions"><button class="btn btn-outline" id="auctionPauseButton" onclick="toggleAuctionPause()">⏸ Pause Auction</button><button class="btn btn-green" onclick="sellPlayer()">✓ SOLD</button><button class="btn btn-danger" onclick="markUnsold()">UNSOLD</button><button class="btn btn-purple" onclick="rtmPlayer()">RTM</button></div>
+      <div class="stage-footer"><button class="btn btn-outline" onclick="previousPlayer()">← Previous</button><button class="btn btn-gold" onclick="nextPlayer()">Next Player →</button></div>
+    </div>
+    <div class="auction-side"><div class="panel"><div class="section-head"><h3>Available Players</h3><span class="count" id="availableCount">0</span></div><input class="search" id="auctionSearch" placeholder="Search player..." oninput="renderAuctionList()"><div id="auctionList" class="player-list"></div></div>
+      <div class="panel latest-team-panel"><h3>Latest Buying Team Snapshot</h3><div id="selectedTeamInfo" class="empty">No player has been bought yet.</div></div>
+    </div>
+  </div>
+</section>
+<section id="page-players" class="page">
+  <div class="section-head"><div><div class="eyebrow">PLAYER DATABASE</div><h3>All registered players</h3></div><button class="btn btn-gold" onclick="openPlayerModal()">+ Add Player</button></div>
+  <div class="toolbar"><input class="search" id="playerSearch" placeholder="Search player name..." oninput="loadPlayers()"><select id="playerCategory" onchange="loadPlayers()"><option value="">All categories</option><option>Indian</option><option>Overseas</option><option>Associate</option></select><select id="playerRole" onchange="loadPlayers()"><option value="">All roles</option><option>Batter</option><option>Batting All-Rounder</option><option>Bowling All-Rounder</option><option>Bowler</option><option>Wicket Keeper</option></select><select id="playerStatus" onchange="loadPlayers()"><option value="">All statuses</option><option>AVAILABLE</option><option>SOLD</option><option>RETAINED</option><option>UNSOLD</option></select></div>
+  <div class="panel table-wrap"><table><thead><tr><th>PLAYER</th><th>CATEGORY</th><th>ROLE</th><th>PREVIOUS TEAM</th><th>PREVIOUS PRICE</th><th>STATUS</th></tr></thead><tbody id="playersTable"></tbody></table></div>
+</section>
+<section id="page-teams" class="page">
+  <div class="section-head"><div><div class="eyebrow">FRANCHISES</div><h3>Team squads & purse</h3></div><button class="btn btn-gold" onclick="openTeamModal()">+ Add Team</button></div><div id="teamsPageGrid" class="team-grid"></div>
+</section>
+<section id="page-retention" class="page">
+  <div class="section-head"><div><div class="eyebrow">PRE-AUCTION MANAGEMENT</div><h3>Retention & release desk</h3></div></div>
+  <div class="panel form-panel"><h3>Retain a previous-season player</h3><p class="muted">Only the player's previous franchise can retain them. Retention amount is deducted from purse and one matching RTM entitlement is consumed.</p>
+    <label>Previous Team<select id="retentionTeam"><option value="">Select previous team first</option></select></label><label>Player<select id="retentionPlayer"><option value="">Select team first</option></select></label>
+    <label>Retention Amount (₹ Cr)<input id="retentionAmount" type="number" min="0.01" step="0.01" placeholder="e.g. 8.00"></label>
+    <button class="btn btn-gold" onclick="executeRetention()">Confirm Retention</button>
+  </div>
+  <div class="section-head"><div><div class="eyebrow">RETAINED SQUADS</div><h3>Retained players</h3></div></div>
+  <div class="panel table-wrap"><table><thead><tr><th>PLAYER</th><th>TEAM</th><th>CATEGORY</th><th>RETAINED PRICE</th><th>ACTION</th></tr></thead><tbody id="retainedTable"></tbody></table></div>
+</section>
+<section id="page-unsold" class="page">
+  <div class="section-head"><div><div class="eyebrow">SECOND CHANCE</div><h3>Unsold player pool</h3></div></div>
+  <input class="search wide-search" id="unsoldSearch" placeholder="Search unsold players..." oninput="loadUnsold()"><div class="panel table-wrap"><table><thead><tr><th>PLAYER</th><th>CATEGORY</th><th>ROLE</th><th>PREVIOUS TEAM</th><th>ACTION</th></tr></thead><tbody id="unsoldTable"></tbody></table></div>
+</section>
+<section id="page-sold" class="page">
+  <div class="section-head"><div><div class="eyebrow">SALE REVERSAL DESK</div><h3>Sold players</h3><p class="muted">Incorrect sale? Bring the player back to auction and refund the buying team's purse.</p></div><button class="btn btn-outline" onclick="loadSold()">↻ Refresh</button></div>
+  <div class="panel table-wrap"><table><thead><tr><th>PLAYER</th><th>CATEGORY</th><th>TEAM SOLD TO</th><th>SALE PRICE</th><th>ACTION</th></tr></thead><tbody id="soldTable"></tbody></table></div>
+</section>
+<section id="page-trades" class="page">
+  <div class="section-head"><div><div class="eyebrow">FRANCHISE TRANSFER</div><h3>Trade a player</h3></div></div>
+  <div class="panel form-panel"><p class="muted">Trade amount is deducted from the buyer's purse and credited to the seller's purse. Both balances update immediately.</p>
+    <label>Player<select id="tradePlayer"></select></label><label>Current / Selling Team<select id="tradeFrom"></select></label><label>Buying Team<select id="tradeTo"></select></label><label>Trade Amount (₹ Cr)<input id="tradeAmount" type="number" step="0.01" min="0.01" placeholder="e.g. 4.50"></label><div id="tradePreview" class="trade-preview">Select seller, buyer and amount to preview both purse changes.</div><button class="btn btn-gold" onclick="executeTrade()">Confirm Trade</button>
+  </div>
+</section>
+<section id="page-import" class="page">
+  <div class="section-head"><div><div class="eyebrow">BULK PLAYER DATABASE</div><h3>Import previous-season Excel</h3></div></div>
+  <div class="panel form-panel"><div class="upload-icon">⇧</div><h3>Upload player workbook</h3><p class="muted">Supported: .xlsx, .xls. Imports Player Import plus all team codes in Team Code Reference. Optional Photo URL column is supported.</p><input id="excelFile" type="file" accept=".xlsx,.xls"><button class="btn btn-gold" onclick="importExcel()">Import Excel</button><div id="importResult" class="result"></div>
+  <div class="hint"><b>Expected columns</b><p>Player Name · Country Category · Role · Previous Price · Previous Team · Country · Base Price · Photo URL (optional)</p></div></div>
+</section>
+<section id="page-history" class="page">
+  <div class="section-head"><div><div class="eyebrow">AUDIT TRAIL</div><h3>Recent auction activity</h3></div></div><div class="panel table-wrap"><table><thead><tr><th>EVENT</th><th>PLAYER</th><th>BUYER / TEAM</th><th>SELLER</th><th>AMOUNT</th><th>TIME</th></tr></thead><tbody id="historyTable"></tbody></table></div>
+</section>
+
+<section id="page-squad" class="page">
+  <div class="section-head"><div><div class="eyebrow">SQUAD PLANNER</div><h3>Team Squad Builder</h3></div></div>
+  <div class="panel form-panel"><label>Select Team<select id="squadTeamSelect"></select></label><div id="squadBuilderContent" class="table-wrap">Choose a team to view its squad.</div></div>
+</section>
+<section id="page-analytics" class="page">
+  <div class="section-head"><div><div class="eyebrow">AUCTION INTELLIGENCE</div><h3>Auction Statistics</h3></div><button class="btn btn-gold" onclick="downloadExcelReport()">Export Excel Report</button></div>
+  <div id="analyticsContent" class="stats-grid"></div><div class="panel"><h3>Team spending leaderboard</h3><div id="spendingLeaderboard"></div></div>
+</section>
+<section id="page-broadcast" class="page">
+  <div class="section-head"><div><div class="eyebrow">STADIUM SCREEN</div><h3>Live Broadcast Mode</h3></div><button class="btn btn-gold" onclick="toggleBroadcast()">Enter / Exit Full Screen</button></div>
+  <div id="broadcastStage" class="broadcast-stage"><div class="broadcast-brand"><img src="/assets/snk-friends-logo.jpg"><span>SNK FRIENDS · LIVE AUCTION</span></div><div class="broadcast-auctioneer"><img src="/assets/snk-auctioneer.jpg"><span>AUCTIONEER</span></div><div id="broadcastPlayer" class="broadcast-player">Waiting for next player</div><div id="broadcastStatus" class="broadcast-status">AUCTION LIVE</div><div id="broadcastDetails">Select a player in Live Auction to begin</div></div>
+</section>
+<section id="page-tools" class="page">
+  <div class="section-head"><div><div class="eyebrow">CONTROL ROOM</div><h3>Auction Tools & Settings</h3></div></div>
+  <div class="tools-grid">
+    <div class="panel form-panel"><h3>Auction Timer</h3><div id="auctionTimerDisplay" class="timer-display">01:00</div><label>Duration (seconds)<input id="timerDuration" type="number" min="5" max="600" value="60"></label><div class="tool-actions"><button class="btn btn-gold" onclick="startAuctionTimer()">Start</button><button class="btn btn-outline" onclick="pauseAuctionTimer()">Pause</button><button class="btn btn-outline" onclick="resetAuctionTimer()">Reset</button></div></div>
+    <div class="panel form-panel"><h3>Theme Selector</h3><label>Choose Theme<select id="themeSelect" onchange="applyTheme(this.value)"><option value="snk">SNK Friends Official</option><option value="gold">Dark Gold Premium</option><option value="stadium">IPL Stadium</option><option value="neon">Neon Sports</option></select></label><p class="muted">Theme selection changes the website palette. Your auction records remain unchanged.</p></div>
+    <div class="panel form-panel"><h3>Backup & Restore</h3><p class="muted">Download a complete JSON backup before major tests.</p><button class="btn btn-gold" onclick="downloadBackup()">Download Backup</button><label>Restore backup JSON<input id="restoreFile" type="file" accept=".json"></label><button class="btn btn-outline" onclick="restoreBackup()">Restore Backup</button></div>
+    <div class="panel form-panel"><h3>RTM Entitlements</h3><p class="muted">Each team starts with 3 Indian + 3 Overseas/Associate RTM cards. Current remaining cards are shown in Teams & Squads.</p><button class="btn btn-outline" onclick="page('teams')">View Team RTM Status</button></div>
+    <div class="panel form-panel"><h3>Reports</h3><p class="muted">Export teams, purse, player register and trade history to Excel. For PDF, use your browser's Print → Save as PDF.</p><button class="btn btn-gold" onclick="downloadExcelReport()">Download Excel</button><button class="btn btn-outline" onclick="window.print()">Print / Save PDF</button></div>
+  </div>
+</section>
+
+<section id="page-nomination" class="page">
+ <div class="section-head"><div><div class="eyebrow">PLAYER DRAFT CONTROL</div><h3>Nomination Center</h3></div></div>
+ <div class="tools-grid">
+  <div class="panel form-panel"><h3>Quick Nomination</h3><label>Player category<select id="nominationCategory"><option value="">All categories</option><option>Indian</option><option>Overseas</option><option>Associate</option></select></label><label>Player role<select id="nominationRole"><option value="">All roles</option><option>Batter</option><option>Batting All-Rounder</option><option>Bowling All-Rounder</option><option>Bowler</option><option>Wicket Keeper</option></select></label><button class="btn btn-gold" onclick="nominateRandomPlayer()">🎲 Random Nomination</button><button class="btn btn-outline" onclick="loadNominationQueue()">Refresh Queue</button></div>
+  <div class="panel form-panel"><h3>Nomination Queue</h3><p class="muted">Select any available player to bring them to the live auction stage.</p><div id="nominationQueue" class="nomination-queue">Loading available players…</div></div>
+ </div>
+</section>
+<section id="page-analyzer" class="page">
+ <div class="section-head"><div><div class="eyebrow">TACTICAL SQUAD PLANNER</div><h3>Playing XI & Team Analyzer</h3></div></div>
+ <div class="panel form-panel"><label>Select Team<select id="xiTeamSelect"></select></label><div id="xiAnalyzerContent">Select a team to build a Playing XI.</div></div>
+</section>
+<section id="page-tournament" class="page">
+ <div class="section-head"><div><div class="eyebrow">SNKPL CONTROL CENTER</div><h3>Tournament Center</h3></div><button class="btn btn-gold" onclick="downloadExcelReport()">Export Tournament Report</button></div>
+ <div id="tournamentTeams" class="team-grid"></div>
+</section>
+</main>
+</div>
+<div id="modal" class="modal"><div class="modal-card"><button class="modal-close" onclick="closeModal()">×</button><div id="modalContent"></div></div></div>
+<div id="toast" class="toast"></div>
+<div id="messageOverlay" class="message-overlay" aria-live="assertive"><div class="message-card"><div id="messageIcon" class="message-icon">!</div><h2 id="messageTitle">Notice</h2><p id="messageText"></p><button class="btn btn-gold" onclick="closeMessage()">OK</button></div></div>
+<script src="/socket.io/socket.io.js"></script><script src="app.js"></script>
+
+<div id="auctionConfirmOverlay" class="auction-confirm-overlay" aria-hidden="true">
+  <div class="auction-confirm-card">
+    <div class="confirm-kicker">SNK FRIENDS · AUCTION DESK</div>
+    <div class="confirm-person"><img src="/assets/snk-auctioneer.jpg" alt="Auctioneer announcing the result"></div>
+    <div class="confirm-stamp">SOLD</div>
+    <h2 id="auctionConfirmTitle">Confirm player sale?</h2>
+    <p id="auctionConfirmText"></p>
+    <div class="confirm-actions"><button class="btn btn-outline" id="auctionConfirmCancel">CANCEL</button><button class="btn btn-gold" id="auctionConfirmOk">✓ OK · CONFIRM SOLD</button></div>
+  </div>
+</div>
+</body></html>

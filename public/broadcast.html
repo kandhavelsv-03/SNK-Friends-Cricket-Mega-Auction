@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SNK Friends · Live Auction Broadcast</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+html,body{margin:0;min-height:100%;background:#050914;color:#fff;font-family:Arial,sans-serif}
+.viewer{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3vw;box-sizing:border-box;background:radial-gradient(ellipse at 50% 0%,#243d71,#080f20 60%,#03060d);text-align:center;overflow:hidden}
+.viewer-head{display:flex;align-items:center;gap:18px;color:#f5ce57;font-weight:900;letter-spacing:.18em;font-size:clamp(14px,2vw,26px)}
+.viewer-head img{width:clamp(65px,9vw,120px);height:clamp(65px,9vw,120px);border-radius:50%;object-fit:cover;border:3px solid #f5ce57}
+.live-tag{margin:30px 0 12px;color:#ffcb57;letter-spacing:.3em;font-weight:900}
+.viewer-player{font-size:clamp(38px,8vw,110px);font-weight:1000;line-height:1.05;text-shadow:0 10px 35px #000}
+.viewer-auctioneer{display:flex;align-items:center;gap:12px;margin:26px auto;color:#cbd7ec;letter-spacing:.18em;font-weight:800}
+.viewer-auctioneer img{width:clamp(60px,8vw,105px);height:clamp(60px,8vw,105px);object-fit:cover;object-position:center 25%;border-radius:50%;border:3px solid #f4c94e}
+.viewer-status{font-size:clamp(34px,7vw,92px);font-weight:1000;letter-spacing:.13em;color:#f5cb54;margin:16px}
+.viewer-status.sold{color:#71f2ad;text-shadow:0 0 36px #1aa76d}
+.viewer-status.unsold{color:#ff6d7b;text-shadow:0 0 36px #c31e39}
+.viewer-details{font-size:clamp(17px,2.5vw,32px);color:#dbe6f8}
+.viewer-team-logo{width:clamp(65px,10vw,130px);height:clamp(65px,10vw,130px);object-fit:contain;vertical-align:middle;margin-right:16px}
+.viewer-foot{position:fixed;bottom:18px;color:#8293ad;font-size:11px;letter-spacing:.22em}
+</style>
+</head>
+<body>
+<div class="viewer">
+  <div class="viewer-head"><img src="/assets/snk-friends-logo.jpg" alt="SNK Friends"><span>SNK FRIENDS · CRICKET MEGA AUCTION</span></div>
+  <div class="live-tag">● LIVE AUCTION</div>
+  <div class="viewer-player" id="viewerPlayer">Waiting for next player</div>
+  <div class="viewer-auctioneer"><img src="/assets/snk-auctioneer.jpg" alt="Auctioneer"><span>AUCTION CONDUCTED BY SNK FRIENDS</span></div>
+  <div class="viewer-status" id="viewerStatus">AUCTION LIVE</div>
+  <div class="viewer-details" id="viewerDetails">The auction will appear here when the admin starts.</div>
+  <div class="viewer-foot">OFFICIAL VIEWER SCREEN · SNK FRIENDS</div>
+</div>
+<script>
+async function refreshBroadcast(){
+  try{
+    const r=await fetch('/api/broadcast/state',{cache:'no-store'});
+    if(!r.ok)return;
+    const s=await r.json();
+    document.getElementById('viewerPlayer').textContent=s.player||'';
+    const status=document.getElementById('viewerStatus');
+    status.textContent=s.status||'AUCTION LIVE';
+    status.className='viewer-status '+(s.status==='SOLD'?'sold':s.status==='UNSOLD'?'unsold':'');
+    const details=document.getElementById('viewerDetails');
+    details.textContent=s.details||'';
+    if(s.status==='SOLD' && s.teamShort){
+      const raw=String(s.teamShort).trim().toUpperCase().replace(/\s+/g,'').replace(/[²^]/g,'2');
+      const logos={SS:'ss',DCS:'dcs',BCS:'dcs',BR:'br','7SV':'7sv','7SB':'7sv','7S':'7sv',KD2:'kd2',KDSQUARE:'kd2',ARC:'arc',KCG:'kcg',RH:'rh',CC:'cc',BBC:'bbc',FCK:'fck',VTK:'vtk',AKS:'aks',TG:'tg'};
+      const key=logos[raw];
+      details.innerHTML=(key?`<img class="viewer-team-logo" src="/assets/team-${key}.webp" alt="${raw} team logo">`:'')+`<span>${String(s.details||'').replace(/[<>]/g,'')}</span>`;
+    }
+  }catch(e){console.warn('Broadcast refresh failed',e);}
+}
+refreshBroadcast();
+setInterval(refreshBroadcast,1500);
+</script>
+<script>
+const socket=io();
+socket.on("broadcast:state",s=>{
+ document.getElementById("viewerPlayer").textContent=s.player||"";
+ const status=document.getElementById("viewerStatus");
+ status.textContent=s.status||"AUCTION LIVE";
+ status.className="viewer-status "+(s.status==="SOLD"?"sold":s.status==="UNSOLD"?"unsold":"");
+ const details=document.getElementById("viewerDetails");
+ details.textContent=s.details||"";
+ if(s.status==="SOLD" && s.teamShort){
+   const raw=String(s.teamShort).trim().toUpperCase().replace(/\s+/g,"").replace(/[²^]/g,"2");
+   const logos={SS:"ss",DCS:"dcs",BCS:"dcs",BR:"br","7SV":"7sv","7SB":"7sv","7S":"7sv",KD2:"kd2",KDSQUARE:"kd2",ARC:"arc",KCG:"kcg",RH:"rh",CC:"cc",BBC:"bbc",FCK:"fck",VTK:"vtk",AKS:"aks",TG:"tg"};
+   const key=logos[raw];
+   details.innerHTML=(key?`<img class="viewer-team-logo" src="/assets/team-${key}.webp" alt="${raw} team logo">`:"")+`<span>${s.details||""}</span>`;
+ }
+});
+</script>
+</body></html>
