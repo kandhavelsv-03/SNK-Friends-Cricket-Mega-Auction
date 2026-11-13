@@ -83,7 +83,8 @@ function showAuctionOutcome(kind, playerName, teamName, amount){
       : `<strong>✕ UNSOLD</strong><span>${esc(playerName)} returns to the pool</span>`;
   banner.innerHTML=`<div class="result-auctioneer"><img src="/assets/snk-auctioneer.jpg" alt="Auctioneer announcing the result"><span class="gavel-strike">🔨</span></div>${resultMarkup}`;
   host.parentElement.insertBefore(banner,host.nextSibling);
-  setTimeout(()=>{banner.classList.add("fade-away");},kind==="SOLD"?2700:1250);
+  // Keep every auction result visible for the same 5-second hold.
+  setTimeout(()=>{banner.classList.add("fade-away");},4700);
 }
 function advanceAuctionImmediately(completedPlayerId){
   const nextPosition=Math.max(0,activeIndex);
@@ -115,14 +116,47 @@ function incrementBid(n){const v=Number($("bidAmount").value||currentBid)+n;$("b
 $("bidTeam").addEventListener("change",()=>{});
 $("bidAmount").addEventListener("input",()=>{const v=Number($("bidAmount").value);if(Number.isFinite(v)&&v>0){$("currentBid").textContent=v.toFixed(2);$("currentBid").classList.add("bid-value-updated");}});
 async function placeBid(){if(auctionPaused)throw new Error("Auction is paused");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select a team and enter a bid");if(amount<=currentBid)throw new Error("Bid must be higher than current bid");await api("/api/bid",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});currentBid=amount;currentBidTeam=teams.find(t=>t.id==team_id)?.name||"";$("currentBid").textContent=amount.toFixed(2);$("currentBidTeam").textContent=currentBidTeam;resetBidCountdown();playAuctionTone("bid");toast("Bid recorded")}
-async function sellPlayer(){try{if(auctionPaused)throw new Error("Resume auction before marking a player SOLD");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select winning team and final amount");const soldTeamObj=teams.find(t=>Number(t.id)===Number(team_id));const soldTeam=soldTeamObj?.name||"Team";const soldName=activePlayer.name;const completedId=activePlayer.id;await api("/api/sold",{method:"POST",body:JSON.stringify({player_id:completedId,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("SOLD",soldName,soldTeam,amount);updateBroadcast("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`);publishBroadcastState("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`,soldTeamObj?.short_name||"",amount);setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},3000);}catch(e){toast(e.message)}}
-async function markUnsold(){try{if(auctionPaused)throw new Error("Resume auction before marking a player UNSOLD");if(!activePlayer)throw new Error("Select a player");const unsoldName=activePlayer.name;const completedId=activePlayer.id;await api("/api/unsold",{method:"POST",body:JSON.stringify({player_id:completedId})});playAuctionTone("unsold");showAuctionOutcome("UNSOLD",unsoldName,"","");updateBroadcast("UNSOLD",unsoldName,"Returned to player pool");setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},250);}catch(e){toast(e.message)}}
+async function sellPlayer(){try{
+  if(auctionPaused)throw new Error("Resume auction before marking a player SOLD");
+  if(!activePlayer)throw new Error("Select a player");
+  const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);
+  if(!team_id||!amount)throw new Error("Select winning team and final amount");
+  const soldTeamObj=teams.find(t=>Number(t.id)===Number(team_id));
+  const soldTeam=soldTeamObj?.name||"Team";
+  const soldName=activePlayer.name;
+  const completedId=activePlayer.id;
+  if(!await announceConfirm("Confirm SOLD?",`<b>${esc(soldName)}</b><br>Will be SOLD to <b>${esc(soldTeam)}</b><br>Final price: <b>₹${amount.toFixed(2)} Cr</b><div class="confirm-team">${teamLogoMarkup(soldTeamObj,"confirm-team-logo")}<span>${esc(soldTeam)}</span></div>`,"✓ CONFIRM SOLD"))return;
+  await api("/api/sold",{method:"POST",body:JSON.stringify({player_id:completedId,team_id,amount})});
+  playAuctionTone("sold");
+  showAuctionOutcome("SOLD",soldName,soldTeam,amount);
+  updateBroadcast("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`);
+  publishBroadcastState("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`,soldTeamObj?.short_name||"",amount);
+  setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},5000);
+}catch(e){toast(e.message)}}
+async function markUnsold(){try{
+  if(auctionPaused)throw new Error("Resume auction before marking a player UNSOLD");
+  if(!activePlayer)throw new Error("Select a player");
+  const unsoldName=activePlayer.name;
+  const completedId=activePlayer.id;
+  if(!await announceConfirm("Confirm UNSOLD?",`<b>${esc(unsoldName)}</b><br>Will be marked as <b>UNSOLD</b> and returned to the player pool.`,"✓ CONFIRM UNSOLD"))return;
+  await api("/api/unsold",{method:"POST",body:JSON.stringify({player_id:completedId})});
+  playAuctionTone("unsold");
+  showAuctionOutcome("UNSOLD",unsoldName,"","");
+  updateBroadcast("UNSOLD",unsoldName,"Returned to player pool");
+  setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},5000);
+}catch(e){toast(e.message)}}
 async function rtmPlayer(){try{
   if(auctionPaused)throw new Error("Resume auction before using RTM");if(!activePlayer)throw new Error("Select a player");
   const team_id=$("bidTeam").value,amount=Number($("bidAmount").value),team=teams.find(t=>Number(t.id)===Number(team_id));
   if(!team_id)throw new Error("Select the previous team in the team selector");
   if(!await announceConfirm("Confirm Right To Match?",`<b>${esc(activePlayer.name)}</b><br>RTM by <b>${esc(team?.name||"")}</b><br>Final price: <b>₹${amount.toFixed(2)} Cr</b><div class="confirm-team">${teamLogoMarkup(team,"confirm-team-logo")}<span>${esc(team?.name||"")}</span></div>`,"✓ CONFIRM RTM"))return;
-  const name=activePlayer.name;const completedId=activePlayer.id;await api("/api/rtm",{method:"POST",body:JSON.stringify({player_id:completedId,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("RTM",name,team?.name||"",amount);updateBroadcast("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`);publishBroadcastState("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`,team?.short_name||"",amount);toast(`${name} retained by RTM – ${team?.name}`,"success");setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},250);
+  const name=activePlayer.name;const completedId=activePlayer.id;
+  await api("/api/rtm",{method:"POST",body:JSON.stringify({player_id:completedId,team_id,amount})});
+  playAuctionTone("sold");showAuctionOutcome("RTM",name,team?.name||"",amount);
+  updateBroadcast("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`);
+  publishBroadcastState("RTM",name,`RTM by ${team?.name} · ₹${amount.toFixed(2)} Cr`,team?.short_name||"",amount);
+  toast(`${name} retained by RTM – ${team?.name}`,"success");
+  setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},5000);
 }catch(e){toast(e.message)}}
 
 async function loadRetention(){
