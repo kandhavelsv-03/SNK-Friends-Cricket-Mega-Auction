@@ -42,8 +42,8 @@ function announceConfirm(title,html,okLabel="✓ OK · CONFIRM SOLD"){
   });
 }
 
-function renderTeamCards(){const html=teams.map(t=>{const pct=Math.max(0,Math.min(100,(t.remaining_purse/90)*100));return `<div class="team-card"><div class="team-card-head"><div class="team-title-with-logo">${teamLogoMarkup(t)}<h4>${esc(t.name)}</h4></div><span class="count">${t.squad_size}/20</span></div><div class="purse">₹${Number(t.remaining_purse).toFixed(2)} Cr</div><div class="muted">Remaining purse · Spent ₹${Number(t.spent).toFixed(2)} Cr</div><div class="progress"><span style="width:${pct}%"></span></div><div class="mini-stats"><span>🇮🇳 <b>${t.indian_count}/9</b></span><span>🌍 <b>${t.effective_overseas}/9</b></span><span>🧩 <b>${t.associate_count}/2</b></span><span>RTM <b>${t.indian_rtm}+${t.overseas_rtm}</b></span></div><button class="btn btn-outline" style="margin-top:14px" onclick="viewSquad(${t.id},'${esc(t.name)}')">View Squad</button><button class="btn btn-gold" style="margin-top:8px" onclick="downloadTeamExcel(${t.id})">Download Excel</button></div>`}).join("")||'<div class="empty">No teams yet. Add your franchises to begin.</div>';$("teamOverview").innerHTML=html}
-function renderTeamsPage(){$("teamsPageGrid").innerHTML=teams.map(t=>`<div class="team-card"><div class="team-card-head"><div class="team-title-with-logo">${teamLogoMarkup(t)}<h4>${esc(t.name)}</h4></div><span class="count">${t.squad_size}/20 Players</span></div><div class="purse">₹${Number(t.remaining_purse).toFixed(2)} Cr</div><div class="mini-stats"><span>Indian ${t.indian_count}/9</span><span>Overseas slots ${t.effective_overseas}/9</span><span>Associate ${t.associate_count}/2</span></div><div class="mini-stats" style="margin-top:10px"><span>Indian RTM: ${t.indian_rtm}</span><span>Overseas/Associate RTM: ${t.overseas_rtm}</span></div><button class="btn btn-outline" style="margin-top:14px" onclick="viewSquad(${t.id},'${esc(t.name)}')">Open Squad</button><button class="btn btn-gold" style="margin-top:8px" onclick="downloadTeamExcel(${t.id})">Download Excel</button></div>`).join("")||'<div class="empty">No teams created.</div>'}
+function renderTeamCards(){const html=teams.map(t=>{const pct=Math.max(0,Math.min(100,(t.remaining_purse/90)*100));return `<div class="team-card"><div class="team-card-head"><div class="team-title-with-logo">${teamLogoMarkup(t)}<h4>${esc(t.name)}</h4></div><span class="count">${t.squad_size}/20</span></div><div class="purse">₹${Number(t.remaining_purse).toFixed(2)} Cr</div><div class="muted">Remaining purse · Spent ₹${Number(t.spent).toFixed(2)} Cr</div><div class="progress"><span style="width:${pct}%"></span></div><div class="mini-stats"><span>🇮🇳 <b>${t.indian_count}/9</b></span><span>🌍 <b>${t.effective_overseas}/9</b></span><span>🧩 <b>${t.associate_count}/2</b></span><span>RTM <b>${t.indian_rtm}+${t.overseas_rtm}</b></span></div><button class="btn btn-outline" style="margin-top:14px" onclick="viewSquad(${t.id},'${esc(t.name)}')">View Squad</button></div>`}).join("")||'<div class="empty">No teams yet. Add your franchises to begin.</div>';$("teamOverview").innerHTML=html}
+function renderTeamsPage(){$("teamsPageGrid").innerHTML=teams.map(t=>`<div class="team-card"><div class="team-card-head"><div class="team-title-with-logo">${teamLogoMarkup(t)}<h4>${esc(t.name)}</h4></div><span class="count">${t.squad_size}/20 Players</span></div><div class="purse">₹${Number(t.remaining_purse).toFixed(2)} Cr</div><div class="mini-stats"><span>Indian ${t.indian_count}/9</span><span>Overseas slots ${t.effective_overseas}/9</span><span>Associate ${t.associate_count}/2</span></div><div class="mini-stats" style="margin-top:10px"><span>Indian RTM: ${t.indian_rtm}</span><span>Overseas/Associate RTM: ${t.overseas_rtm}</span></div><button class="btn btn-outline" style="margin-top:14px" onclick="viewSquad(${t.id},'${esc(t.name)}')">Open Squad</button></div>`).join("")||'<div class="empty">No teams created.</div>'}
 async function viewSquad(id,name){try{const rows=await api("/api/squad/"+id);$("modalContent").innerHTML=`<h3>${esc(name)} – Squad</h3><p class="muted">${rows.length} players · Amounts in ₹ Crore</p><div class="table-wrap"><table><thead><tr><th>PLAYER</th><th>CATEGORY</th><th>ROLE</th><th>TYPE</th><th>PRICE</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.category}</td><td>${esc(p.role)}</td><td>${p.acquisition_type}</td><td>${Number(p.amount).toFixed(2)}</td></tr>`).join("")}</tbody></table></div>`;openModal()}catch(e){toast(e.message)}}
 async function loadStats(){try{const s=await api("/api/stats");$("statTotal").textContent=s.total||0;$("statAvailable").textContent=s.available||0;$("statSold").textContent=(Number(s.sold)||0)+(Number(s.retained)||0);$("statUnsold").textContent=s.unsold||0}catch(e){}}
 async function loadPlayers(){try{const q=new URLSearchParams({search:$("playerSearch")?.value||"",category:$("playerCategory")?.value||"",role:$("playerRole")?.value||"",status:$("playerStatus")?.value||""});players=await api("/api/players?"+q);$("playersTable").innerHTML=players.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="muted">${esc(p.country||"")}</div></td><td>${p.category}</td><td>${esc(p.role)}</td><td>${esc(p.previous_team||"—")}</td><td>₹${Number(p.previous_price||0).toFixed(2)} Cr</td><td><span class="status ${p.status}">${p.status}</span></td></tr>`).join("")||'<tr><td colspan="6" class="empty">No players found.</td></tr>'}catch(e){toast(e.message)}}
@@ -83,7 +83,7 @@ function showAuctionOutcome(kind, playerName, teamName, amount){
       : `<strong>✕ UNSOLD</strong><span>${esc(playerName)} returns to the pool</span>`;
   banner.innerHTML=`<div class="result-auctioneer"><img src="/assets/snk-auctioneer.jpg" alt="Auctioneer announcing the result"><span class="gavel-strike">🔨</span></div>${resultMarkup}`;
   host.parentElement.insertBefore(banner,host.nextSibling);
-  setTimeout(()=>{banner.classList.add("fade-away");},1250);
+  setTimeout(()=>{banner.classList.add("fade-away");},kind==="SOLD"?2700:1250);
 }
 function advanceAuctionImmediately(completedPlayerId){
   const nextPosition=Math.max(0,activeIndex);
@@ -115,7 +115,7 @@ function incrementBid(n){const v=Number($("bidAmount").value||currentBid)+n;$("b
 $("bidTeam").addEventListener("change",()=>{});
 $("bidAmount").addEventListener("input",()=>{const v=Number($("bidAmount").value);if(Number.isFinite(v)&&v>0){$("currentBid").textContent=v.toFixed(2);$("currentBid").classList.add("bid-value-updated");}});
 async function placeBid(){if(auctionPaused)throw new Error("Auction is paused");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select a team and enter a bid");if(amount<=currentBid)throw new Error("Bid must be higher than current bid");await api("/api/bid",{method:"POST",body:JSON.stringify({player_id:activePlayer.id,team_id,amount})});currentBid=amount;currentBidTeam=teams.find(t=>t.id==team_id)?.name||"";$("currentBid").textContent=amount.toFixed(2);$("currentBidTeam").textContent=currentBidTeam;resetBidCountdown();playAuctionTone("bid");toast("Bid recorded")}
-async function sellPlayer(){try{if(auctionPaused)throw new Error("Resume auction before marking a player SOLD");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select winning team and final amount");const soldTeamObj=teams.find(t=>Number(t.id)===Number(team_id));const soldTeam=soldTeamObj?.name||"Team";const soldName=activePlayer.name;const completedId=activePlayer.id;await api("/api/sold",{method:"POST",body:JSON.stringify({player_id:completedId,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("SOLD",soldName,soldTeam,amount);updateBroadcast("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`);publishBroadcastState("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`,soldTeamObj?.short_name||"",amount);setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},250);}catch(e){toast(e.message)}}
+async function sellPlayer(){try{if(auctionPaused)throw new Error("Resume auction before marking a player SOLD");if(!activePlayer)throw new Error("Select a player");const team_id=$("bidTeam").value,amount=Number($("bidAmount").value);if(!team_id||!amount)throw new Error("Select winning team and final amount");const soldTeamObj=teams.find(t=>Number(t.id)===Number(team_id));const soldTeam=soldTeamObj?.name||"Team";const soldName=activePlayer.name;const completedId=activePlayer.id;await api("/api/sold",{method:"POST",body:JSON.stringify({player_id:completedId,team_id,amount})});playAuctionTone("sold");showAuctionOutcome("SOLD",soldName,soldTeam,amount);updateBroadcast("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`);publishBroadcastState("SOLD",soldName,`${soldTeam} · ₹${Number(amount).toFixed(2)} Cr`,soldTeamObj?.short_name||"",amount);setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},3000);}catch(e){toast(e.message)}}
 async function markUnsold(){try{if(auctionPaused)throw new Error("Resume auction before marking a player UNSOLD");if(!activePlayer)throw new Error("Select a player");const unsoldName=activePlayer.name;const completedId=activePlayer.id;await api("/api/unsold",{method:"POST",body:JSON.stringify({player_id:completedId})});playAuctionTone("unsold");showAuctionOutcome("UNSOLD",unsoldName,"","");updateBroadcast("UNSOLD",unsoldName,"Returned to player pool");setTimeout(()=>{advanceAuctionImmediately(completedId);refreshAuctionAfterResult();},250);}catch(e){toast(e.message)}}
 async function rtmPlayer(){try{
   if(auctionPaused)throw new Error("Resume auction before using RTM");if(!activePlayer)throw new Error("Select a player");
@@ -183,42 +183,19 @@ function downloadResetBackupFile(backup){
   a.href=url;a.download=`SNK_Pre_Reset_Backup_${new Date().toISOString().replace(/[:.]/g,"-")}.json`;
   document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
 }
-
 async function resetAllData(){
-  if(!confirm("DANGER: This clears all players, squads, bids, trades, auction history and broadcast state. The 14 default teams will be recreated. A backup will download automatically. Continue?")) return;
-
-  const phrase = prompt('Type DELETE ALL DATA to confirm the full reset:');
-
-  if(phrase !== "DELETE ALL DATA"){
-    toast("Reset cancelled. No data was deleted.");
-    return;
-  }
-
-  try {
-    const result = await api("/api/reset-all-data", {
-      method: "POST",
-      body: JSON.stringify({
-        confirm: "DELETE ALL DATA"
-      })
-    });
-
-    if(result.backup) downloadResetBackupFile(result.backup);
-
-    activePlayer = null;
-    available = [];
-
-    toast(result.message || "All auction data cleared.", "success");
-
-    await refreshAll();
-    await loadAuction();
-    await loadHistory();
-    await fillTradeSelects();
-
-  } catch(e) {
-    toast(e.message);
-  }
+  if(!confirm("DANGER: This clears all players, squads, bids, trades, auction history and broadcast state. The 14 default teams will be recreated. A backup will download automatically. Continue?"))return;
+  const phrase=prompt('Type DELETE ALL DATA to confirm the full reset:');
+  if(phrase!=="DELETE ALL DATA"){toast("Reset cancelled. No data was deleted.");return;}
+  const adminToken=prompt("Enter the RESET_ADMIN_TOKEN configured by the project owner:");
+  if(!adminToken){toast("Reset cancelled. Admin token is required.");return;}
+  try{
+    const result=await api("/api/reset-all-data",{method:"POST",body:JSON.stringify({confirm:"DELETE ALL DATA",admin_token:adminToken})});
+    if(result.backup)downloadResetBackupFile(result.backup);
+    activePlayer=null;available=[];toast(result.message||"All auction data cleared.","success");
+    await refreshAll();await loadAuction();await loadHistory();await fillTradeSelects();
+  }catch(e){toast(e.message)}
 }
-
 async function loadHistory(){try{const rows=await api("/api/history");$("historyTable").innerHTML=rows.map(e=>`<tr><td><span class="status">${e.event_type}</span></td><td>${esc(e.player_name||"—")}</td><td>${(()=>{const t=teams.find(x=>x.name===e.team_name);return t?`${teamLogoMarkup(t,"team-logo history-team-logo")} ${esc(e.team_name)}`:esc(e.team_name||"—")})()}</td><td>${(()=>{const t=teams.find(x=>x.name===e.seller_team_name);return t?`${teamLogoMarkup(t,"team-logo history-team-logo")} ${esc(e.seller_team_name)}`:esc(e.seller_team_name||"—")})()}</td><td>${e.amount==null?"—":"₹"+Number(e.amount).toFixed(2)+" Cr"}</td><td>${new Date(e.created_at).toLocaleString()}</td></tr>`).join("")||'<tr><td colspan="5" class="empty">No activity yet.</td></tr>'}catch(e){}}
 function openTeamModal(){$("modalContent").innerHTML=`<h3>Add Franchise Team</h3><label>Team Name<input id="newTeamName" placeholder="e.g. Chennai Super Kings"></label><label>Short Name<input id="newTeamShort" placeholder="CSK"></label><label>Logo URL (optional)<input id="newTeamLogo" placeholder="https://..."></label><button class="btn btn-gold" onclick="createTeam()">Create Team · ₹90 Cr</button>`;openModal()}
 async function createTeam(){try{await api("/api/teams",{method:"POST",body:JSON.stringify({name:$("newTeamName").value,short_name:$("newTeamShort").value,logo_url:$("newTeamLogo").value})});closeModal();toast("Team created with ₹90 Cr purse");await loadTeams()}catch(e){toast(e.message)}}

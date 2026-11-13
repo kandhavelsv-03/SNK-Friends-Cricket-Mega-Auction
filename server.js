@@ -289,10 +289,12 @@ async function validateAddition(teamId, player, amount, session) {
   const missingCategorySlots =
     missingIndian + missingOverseas + missingAssociate;
 
-  // Ensure minimum category requirements remain achievable
-  if (missingCategorySlots > slotsAfter) {
+  // Minimum category requirements may be completed any time before the
+  // 20-player squad maximum; do not force them to be completed by player 17.
+  const slotsAvailableBeforeMaximum = Math.max(0, MAX_SQUAD - totalAfter);
+  if (missingCategorySlots > slotsAvailableBeforeMaximum) {
     throw new Error(
-      'This purchase makes the minimum category requirements impossible'
+      'Minimum category requirements must be completed before the 20-player maximum'
     );
   }
 
@@ -341,7 +343,17 @@ async function addPlayerToTeam(teamId, player, amount, type, session) {
     },
     { session }
   );
+
+  // Deduct the winning/retention amount from the team's live remaining purse.
+  const purseUpdate = await (await col('teams')).updateOne(
+    { id: Number(teamId), remaining_purse: { $gte: amt } },
+    { $inc: { remaining_purse: -amt } },
+    { session }
+  );
+  if (!purseUpdate.modifiedCount) {
+    throw new Error('Team does not have enough remaining purse');
   }
+}
 
 // AUCTION EVENT
 
@@ -1966,34 +1978,41 @@ app.get('/api/backup', async (_req, res) => {
 });
 
 // ==========================================
-// ADMIN RESET - BACKUP BEFORE DELETE
+// DANGEROUS ADMIN RESET
+// Requires RESET_ADMIN_TOKEN. A full backup is returned before deletion.
 // ==========================================
 
 app.post('/api/reset-all-data', async (req, res) => {
   try {
-    if (req.body?.confirm !== 'DELETE ALL DATA') {
-      return res.status(400).json({
+    const configuredToken = process.env.RESET_ADMIN_TOKEN;
+    if (!configuredToken) {
+      return res.status(503).json({
         ok: false,
-        error: 'Type DELETE ALL DATA to confirm.'
+        error: 'Full reset is not configured. Set RESET_ADMIN_TOKEN in the server environment first.'
       });
     }
 
+    const suppliedToken = String(req.body?.admin_token || '');
+    const expected = Buffer.from(configuredToken);
+    const supplied = Buffer.from(suppliedToken);
+    if (expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+      return res.status(403).json({ ok: false, error: 'Invalid admin reset token.' });
+    }
+
+    if (req.body?.confirm !== 'DELETE ALL DATA') {
+      return res.status(400).json({ ok: false, error: 'Type DELETE ALL DATA to confirm.' });
+    }
+
     const collectionNames = [
-      'teams',
-      'players',
-      'team_squads',
-      'auction_bids',
-      'trades',
-      'auction_events',
-      'broadcast_state'
+      'teams', 'players', 'team_squads', 'auction_bids',
+      'trades', 'auction_events', 'broadcast_state'
     ];
 
-    // Create backup before deleting anything
+    // Build the backup first. If backup creation fails, nothing is deleted.
     const backupTables = {};
-
     for (const name of collectionNames) {
-      const documents = await (await col(name)).find({}).toArray();
-      backupTables[name] = documents;
+      backupTables[name] = (await (await col(name)).find({}).toArray())
+        .map(({ _id, ...document }) => document);
     }
 
     const backup = {
@@ -2005,17 +2024,13 @@ app.post('/api/reset-all-data', async (req, res) => {
     };
 
     const db = await dbPromise;
-
     for (const name of collectionNames) {
       await db.collection(name).deleteMany({});
     }
-
     await db.collection('counters').deleteMany({});
-
     await seedTeamsIfEmpty();
 
     io.emit('auction:update');
-
     io.emit('broadcast:state', {
       status: 'AUCTION LIVE',
       player: 'Waiting for next player',
@@ -2024,25 +2039,19 @@ app.post('/api/reset-all-data', async (req, res) => {
 
     return res.json({
       ok: true,
-      message: 'All auction data cleared. Default 14 teams recreated.',
+      message: 'All auction data was cleared. Default 14 teams were recreated.',
       backup
     });
-
-  } catch (error) {
-    console.error('Reset error:', error);
-
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// Restore remains disabled
+// Restore remains disabled until a separately authenticated restore workflow is configured.
 app.all('/api/restore', (req, res) => {
   return res.status(403).json({
     ok: false,
-    error: 'Restore operation is disabled.'
+    error: 'Restore operation is disabled. Use the downloaded backup with an approved restore workflow.'
   });
 });
 
