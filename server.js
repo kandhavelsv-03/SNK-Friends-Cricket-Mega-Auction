@@ -6,7 +6,6 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
-const crypto = require('crypto');
 const cors = require('cors');
 const session = require('express-session');
 
@@ -1978,27 +1977,13 @@ app.get('/api/backup', async (_req, res) => {
 });
 
 // ==========================================
-// DANGEROUS ADMIN RESET
-// Requires RESET_ADMIN_TOKEN. A full backup is returned before deletion.
+// ADMIN RESET
+// Requires the explicit DELETE ALL DATA confirmation phrase.
+// A full backup is returned before deletion.
 // ==========================================
 
 app.post('/api/reset-all-data', async (req, res) => {
   try {
-    const configuredToken = process.env.RESET_ADMIN_TOKEN;
-    if (!configuredToken) {
-      return res.status(503).json({
-        ok: false,
-        error: 'Full reset is not configured. Set RESET_ADMIN_TOKEN in the server environment first.'
-      });
-    }
-
-    const suppliedToken = String(req.body?.admin_token || '');
-    const expected = Buffer.from(configuredToken);
-    const supplied = Buffer.from(suppliedToken);
-    if (expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
-      return res.status(403).json({ ok: false, error: 'Invalid admin reset token.' });
-    }
-
     if (req.body?.confirm !== 'DELETE ALL DATA') {
       return res.status(400).json({ ok: false, error: 'Type DELETE ALL DATA to confirm.' });
     }

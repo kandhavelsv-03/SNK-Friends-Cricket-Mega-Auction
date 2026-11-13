@@ -187,10 +187,8 @@ async function resetAllData(){
   if(!confirm("DANGER: This clears all players, squads, bids, trades, auction history and broadcast state. The 14 default teams will be recreated. A backup will download automatically. Continue?"))return;
   const phrase=prompt('Type DELETE ALL DATA to confirm the full reset:');
   if(phrase!=="DELETE ALL DATA"){toast("Reset cancelled. No data was deleted.");return;}
-  const adminToken=prompt("Enter the RESET_ADMIN_TOKEN configured by the project owner:");
-  if(!adminToken){toast("Reset cancelled. Admin token is required.");return;}
   try{
-    const result=await api("/api/reset-all-data",{method:"POST",body:JSON.stringify({confirm:"DELETE ALL DATA",admin_token:adminToken})});
+    const result=await api("/api/reset-all-data",{method:"POST",body:JSON.stringify({confirm:"DELETE ALL DATA"})});
     if(result.backup)downloadResetBackupFile(result.backup);
     activePlayer=null;available=[];toast(result.message||"All auction data cleared.","success");
     await refreshAll();await loadAuction();await loadHistory();await fillTradeSelects();
