@@ -568,7 +568,7 @@ app.get('/api/players', async (req, res) => {
 
     const rows = await (await col('players'))
       .find(q)
-      .sort({ name: 1 })
+      .sort({ id: 1 })
       .toArray();
 
     const teams = await (await col('teams')).find({}).toArray();
