@@ -191,3 +191,13 @@ body[data-theme="neon"] .btn-gold{background:linear-gradient(120deg,#4d32bd,#26d
 #page-auction .auction-result-banner .result-auctioneer{display:none}
 #page-auction .auction-result-banner strong{font-size:20px}
 @media(max-width:1000px){#page-auction .player-stage{padding:12px}}
+/* Published by Kandhavel Footer */
+.site-footer {
+  width: 100%;
+  text-align: center;
+  padding: 18px;
+  color: #c9c9c9;
+  font-size: 13px;
+  border-top: 1px solid rgba(255,255,255,0.12);
+  background: #101010;
+}
